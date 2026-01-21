@@ -1,7 +1,7 @@
 // src/server.ts
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
-import { google, docs_v1, drive_v3, sheets_v4 } from 'googleapis';
+import { google, docs_v1, drive_v3, sheets_v4, slides_v1 } from 'googleapis';
 import { authorize } from './auth.js';
 import { OAuth2Client } from 'google-auth-library';
 
@@ -21,15 +21,17 @@ NotImplementedError
 } from './types.js';
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
+import * as SlidesHelpers from './googleSlidesApiHelpers.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
 let googleDrive: drive_v3.Drive | null = null;
 let googleSheets: sheets_v4.Sheets | null = null;
+let googleSlides: slides_v1.Slides | null = null;
 
 // --- Initialization ---
 async function initializeGoogleClient() {
-if (googleDocs && googleDrive && googleSheets) return { authClient, googleDocs, googleDrive, googleSheets };
+if (googleDocs && googleDrive && googleSheets && googleSlides) return { authClient, googleDocs, googleDrive, googleSheets, googleSlides };
 if (!authClient) { // Check authClient instead of googleDocs to allow re-attempt
 try {
 console.error("Attempting to authorize Google API client...");
@@ -38,6 +40,7 @@ authClient = client; // Assign client here
 googleDocs = google.docs({ version: 'v1', auth: authClient });
 googleDrive = google.drive({ version: 'v3', auth: authClient });
 googleSheets = google.sheets({ version: 'v4', auth: authClient });
+googleSlides = google.slides({ version: 'v1', auth: authClient });
 console.error("Google API client authorized successfully.");
 } catch (error) {
 console.error("FATAL: Failed to initialize Google API client:", error);
@@ -45,11 +48,12 @@ authClient = null; // Reset on failure
 googleDocs = null;
 googleDrive = null;
 googleSheets = null;
+googleSlides = null;
 // Decide if server should exit or just fail tools
 throw new Error("Google client initialization failed. Cannot start server tools.");
 }
 }
-// Ensure googleDocs, googleDrive, and googleSheets are set if authClient is valid
+// Ensure googleDocs, googleDrive, googleSheets, and googleSlides are set if authClient is valid
 if (authClient && !googleDocs) {
 googleDocs = google.docs({ version: 'v1', auth: authClient });
 }
@@ -59,12 +63,15 @@ googleDrive = google.drive({ version: 'v3', auth: authClient });
 if (authClient && !googleSheets) {
 googleSheets = google.sheets({ version: 'v4', auth: authClient });
 }
-
-if (!googleDocs || !googleDrive || !googleSheets) {
-throw new Error("Google Docs, Drive, and Sheets clients could not be initialized.");
+if (authClient && !googleSlides) {
+googleSlides = google.slides({ version: 'v1', auth: authClient });
 }
 
-return { authClient, googleDocs, googleDrive, googleSheets };
+if (!googleDocs || !googleDrive || !googleSheets || !googleSlides) {
+throw new Error("Google Docs, Drive, Sheets, and Slides clients could not be initialized.");
+}
+
+return { authClient, googleDocs, googleDrive, googleSheets, googleSlides };
 }
 
 // Set up process-level unhandled error/rejection handlers to prevent crashes
@@ -109,6 +116,15 @@ if (!sheets) {
 throw new UserError("Google Sheets client is not initialized. Authentication might have failed during startup or lost connection.");
 }
 return sheets;
+}
+
+// --- Helper to get Slides client within tools ---
+async function getSlidesClient() {
+const { googleSlides: slides } = await initializeGoogleClient();
+if (!slides) {
+throw new UserError("Google Slides client is not initialized. Authentication might have failed during startup or lost connection.");
+}
+return slides;
 }
 
 // === HELPER FUNCTIONS ===
@@ -1781,6 +1797,112 @@ try {
 });
 
 server.addTool({
+name: 'listAllFolders',
+description: 'Recursively lists all folders in Google Drive as a tree structure. Only returns folders, not files.',
+parameters: z.object({
+  folderId: z.string().optional().default('root').describe('ID of the folder to start from. Defaults to "root".'),
+  maxDepth: z.number().int().min(1).max(10).optional().default(5).describe('Maximum depth to traverse (1-10). Defaults to 5.'),
+}),
+execute: async (args, { log }) => {
+const drive = await getDriveClient();
+log.info(`Listing all folders recursively from: ${args.folderId} with max depth: ${args.maxDepth}`);
+
+interface FolderNode {
+  id: string;
+  name: string;
+  children: FolderNode[];
+}
+
+async function getFoldersInFolder(parentId: string): Promise<FolderNode[]> {
+  const response = await drive.files.list({
+    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    pageSize: 100,
+    orderBy: 'name',
+    fields: 'files(id,name)',
+  });
+
+  return (response.data.files || []).map(f => ({
+    id: f.id!,
+    name: f.name!,
+    children: [],
+  }));
+}
+
+async function buildTree(folderId: string, currentDepth: number): Promise<FolderNode[]> {
+  if (currentDepth > args.maxDepth) {
+    return [];
+  }
+
+  const folders = await getFoldersInFolder(folderId);
+
+  for (const folder of folders) {
+    folder.children = await buildTree(folder.id, currentDepth + 1);
+  }
+
+  return folders;
+}
+
+function renderTree(nodes: FolderNode[], prefix: string = '', isLast: boolean[] = []): string {
+  let result = '';
+
+  nodes.forEach((node, index) => {
+    const isLastNode = index === nodes.length - 1;
+    const connector = isLastNode ? '└── ' : '├── ';
+    const childPrefix = isLastNode ? '    ' : '│   ';
+
+    // Build the prefix based on parent levels
+    let linePrefix = '';
+    for (let i = 0; i < isLast.length; i++) {
+      linePrefix += isLast[i] ? '    ' : '│   ';
+    }
+
+    result += `${linePrefix}${connector}📁 ${node.name} (${node.id})\n`;
+
+    if (node.children.length > 0) {
+      result += renderTree(node.children, prefix + childPrefix, [...isLast, isLastNode]);
+    }
+  });
+
+  return result;
+}
+
+function countFolders(nodes: FolderNode[]): number {
+  return nodes.reduce((count, node) => count + 1 + countFolders(node.children), 0);
+}
+
+try {
+  // Get the root folder name if not "root"
+  let rootName = 'My Drive';
+  if (args.folderId !== 'root') {
+    const rootFolder = await drive.files.get({
+      fileId: args.folderId,
+      fields: 'name',
+    });
+    rootName = rootFolder.data.name || 'Unknown Folder';
+  }
+
+  const tree = await buildTree(args.folderId, 1);
+  const totalFolders = countFolders(tree);
+
+  if (tree.length === 0) {
+    return `📁 ${rootName}\n   (no subfolders found)`;
+  }
+
+  let result = `📁 ${rootName}\n`;
+  result += renderTree(tree);
+  result += `\n---\nTotal: ${totalFolders} folder${totalFolders !== 1 ? 's' : ''} (max depth: ${args.maxDepth})`;
+
+  return result;
+} catch (error: any) {
+  log.error(`Error listing folders recursively: ${error.message || error}`);
+  if (error.code === 404) throw new UserError("Folder not found. Check the folder ID.");
+  if (error.code === 403) throw new UserError("Permission denied. Make sure you have access to this folder.");
+  throw new UserError(`Failed to list folders: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
+server.addTool({
 name: 'getFolderInfo',
 description: 'Gets detailed information about a specific folder in Google Drive.',
 parameters: z.object({
@@ -2467,11 +2589,1484 @@ execute: async (args, { log }) => {
 }
 });
 
+// === ENHANCED FORMATTING TOOLS ===
+
+// Schema for structured content sections
+const FormattedSectionSchema = z.object({
+  type: z.enum(['heading1', 'heading2', 'heading3', 'heading4', 'title', 'subtitle', 'normal', 'bullet', 'numbered']).describe('The type of content section'),
+  text: z.string().describe('The text content for this section'),
+  bold: z.boolean().optional().describe('Apply bold to the entire section'),
+  italic: z.boolean().optional().describe('Apply italic to the entire section'),
+  color: z.string().optional().describe('Text color in hex format (e.g., "#FF0000" for red)'),
+});
+
+const FormattedContentSchema = z.array(FormattedSectionSchema).describe('Array of formatted content sections to insert');
+
+server.addTool({
+  name: 'createFormattedDocument',
+  description: `Creates a new Google Document with properly formatted content. Instead of raw text, you provide structured sections with formatting types (headings, bullets, etc.) and the tool applies proper Google Docs formatting automatically. This prevents auto-list conversion issues and ensures clean, professional documents.
+
+IMPORTANT: Use this instead of createDocument + insertText when you need formatted content.
+
+Example content array:
+[
+  { "type": "title", "text": "My Document Title" },
+  { "type": "heading1", "text": "Introduction", "color": "#1565C0" },
+  { "type": "normal", "text": "This is regular paragraph text." },
+  { "type": "bullet", "text": "First bullet point" },
+  { "type": "bullet", "text": "Second bullet point" },
+  { "type": "heading2", "text": "Section Two" },
+  { "type": "normal", "text": "More content here.", "bold": true }
+]`,
+  parameters: z.object({
+    title: z.string().min(1).describe('Title for the new document (appears in Drive).'),
+    content: FormattedContentSchema.describe('Array of formatted content sections'),
+    parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
+  }),
+  execute: async (args, { log }) => {
+    const drive = await getDriveClient();
+    const docs = await getDocsClient();
+    log.info(`Creating formatted document "${args.title}" with ${args.content.length} sections`);
+
+    try {
+      // Step 1: Create the document
+      const documentMetadata: drive_v3.Schema$File = {
+        name: args.title,
+        mimeType: 'application/vnd.google-apps.document',
+      };
+
+      if (args.parentFolderId) {
+        documentMetadata.parents = [args.parentFolderId];
+      }
+
+      const createResponse = await drive.files.create({
+        requestBody: documentMetadata,
+        fields: 'id,name,webViewLink',
+      });
+
+      const document = createResponse.data;
+      const documentId = document.id!;
+      log.info(`Document created: ${documentId}`);
+
+      // Step 2: Build batch update requests for all content
+      const requests: docs_v1.Schema$Request[] = [];
+      let currentIndex = 1; // Google Docs starts at index 1
+      const styleRequests: docs_v1.Schema$Request[] = [];
+
+      // Track bullet list state
+      let inBulletList = false;
+      let bulletListId: string | null = null;
+      let inNumberedList = false;
+      let numberedListId: string | null = null;
+
+      // Process each content section
+      for (let i = 0; i < args.content.length; i++) {
+        const section = args.content[i];
+        const text = section.text + '\n'; // Add newline after each section
+        const textLength = text.length;
+        const startIndex = currentIndex;
+        const endIndex = currentIndex + textLength;
+
+        // Insert the text
+        requests.push({
+          insertText: {
+            location: { index: currentIndex },
+            text: text,
+          },
+        });
+
+        // Determine paragraph style based on type
+        let namedStyleType: string | null = null;
+        let isBullet = false;
+        let isNumbered = false;
+
+        switch (section.type) {
+          case 'title':
+            namedStyleType = 'TITLE';
+            break;
+          case 'subtitle':
+            namedStyleType = 'SUBTITLE';
+            break;
+          case 'heading1':
+            namedStyleType = 'HEADING_1';
+            break;
+          case 'heading2':
+            namedStyleType = 'HEADING_2';
+            break;
+          case 'heading3':
+            namedStyleType = 'HEADING_3';
+            break;
+          case 'heading4':
+            namedStyleType = 'HEADING_4';
+            break;
+          case 'bullet':
+            isBullet = true;
+            break;
+          case 'numbered':
+            isNumbered = true;
+            break;
+          case 'normal':
+          default:
+            namedStyleType = 'NORMAL_TEXT';
+            break;
+        }
+
+        // Apply paragraph style if it's a named style
+        if (namedStyleType) {
+          styleRequests.push({
+            updateParagraphStyle: {
+              range: { startIndex, endIndex: endIndex - 1 }, // Exclude the newline for paragraph style
+              paragraphStyle: {
+                namedStyleType: namedStyleType,
+              },
+              fields: 'namedStyleType',
+            },
+          });
+        }
+
+        // Handle bullet lists
+        if (isBullet) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            },
+          });
+        }
+
+        // Handle numbered lists
+        if (isNumbered) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
+            },
+          });
+        }
+
+        // Apply text formatting (bold, italic, color)
+        const textStyleFields: string[] = [];
+        const textStyle: docs_v1.Schema$TextStyle = {};
+
+        if (section.bold) {
+          textStyle.bold = true;
+          textStyleFields.push('bold');
+        }
+        if (section.italic) {
+          textStyle.italic = true;
+          textStyleFields.push('italic');
+        }
+        if (section.color) {
+          // Parse hex color
+          const hex = section.color.replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          textStyle.foregroundColor = {
+            color: { rgbColor: { red: r, green: g, blue: b } },
+          };
+          textStyleFields.push('foregroundColor');
+        }
+
+        if (textStyleFields.length > 0) {
+          styleRequests.push({
+            updateTextStyle: {
+              range: { startIndex, endIndex: endIndex - 1 }, // Exclude newline
+              textStyle: textStyle,
+              fields: textStyleFields.join(','),
+            },
+          });
+        }
+
+        currentIndex = endIndex;
+      }
+
+      // Step 3: Execute batch update - first insert all text, then apply styles
+      if (requests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: documentId,
+          requestBody: { requests },
+        });
+        log.info(`Inserted ${requests.length} text sections`);
+      }
+
+      // Apply styles in a separate batch (after text is inserted)
+      if (styleRequests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: documentId,
+          requestBody: { requests: styleRequests },
+        });
+        log.info(`Applied ${styleRequests.length} style updates`);
+      }
+
+      return `Successfully created formatted document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}\n\nAdded ${args.content.length} formatted sections.`;
+
+    } catch (error: any) {
+      log.error(`Error creating formatted document: ${error.message || error}`);
+      if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
+      if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
+      throw new UserError(`Failed to create formatted document: ${error.message || 'Unknown error'}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'insertFormattedContent',
+  description: `Inserts properly formatted content into an existing Google Document at a specified index. Uses structured sections with formatting types (headings, bullets, etc.) instead of raw text, ensuring clean formatting without auto-list conversion issues.
+
+IMPORTANT: Use this instead of insertText when you need formatted content.
+
+Example content array:
+[
+  { "type": "heading1", "text": "New Section", "color": "#1565C0" },
+  { "type": "normal", "text": "This is paragraph text." },
+  { "type": "bullet", "text": "Bullet point one" },
+  { "type": "bullet", "text": "Bullet point two" }
+]`,
+  parameters: DocumentIdParameter.extend({
+    index: z.number().int().min(1).describe('The index (1-based) where the content should be inserted.'),
+    content: FormattedContentSchema.describe('Array of formatted content sections to insert'),
+  }),
+  execute: async (args, { log }) => {
+    const docs = await getDocsClient();
+    log.info(`Inserting ${args.content.length} formatted sections into document ${args.documentId} at index ${args.index}`);
+
+    try {
+      const requests: docs_v1.Schema$Request[] = [];
+      let currentIndex = args.index;
+      const styleRequests: docs_v1.Schema$Request[] = [];
+
+      // Process each content section
+      for (let i = 0; i < args.content.length; i++) {
+        const section = args.content[i];
+        const text = section.text + '\n';
+        const textLength = text.length;
+        const startIndex = currentIndex;
+        const endIndex = currentIndex + textLength;
+
+        // Insert the text
+        requests.push({
+          insertText: {
+            location: { index: currentIndex },
+            text: text,
+          },
+        });
+
+        // Determine paragraph style based on type
+        let namedStyleType: string | null = null;
+        let isBullet = false;
+        let isNumbered = false;
+
+        switch (section.type) {
+          case 'title':
+            namedStyleType = 'TITLE';
+            break;
+          case 'subtitle':
+            namedStyleType = 'SUBTITLE';
+            break;
+          case 'heading1':
+            namedStyleType = 'HEADING_1';
+            break;
+          case 'heading2':
+            namedStyleType = 'HEADING_2';
+            break;
+          case 'heading3':
+            namedStyleType = 'HEADING_3';
+            break;
+          case 'heading4':
+            namedStyleType = 'HEADING_4';
+            break;
+          case 'bullet':
+            isBullet = true;
+            break;
+          case 'numbered':
+            isNumbered = true;
+            break;
+          case 'normal':
+          default:
+            namedStyleType = 'NORMAL_TEXT';
+            break;
+        }
+
+        if (namedStyleType) {
+          styleRequests.push({
+            updateParagraphStyle: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              paragraphStyle: {
+                namedStyleType: namedStyleType,
+              },
+              fields: 'namedStyleType',
+            },
+          });
+        }
+
+        if (isBullet) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            },
+          });
+        }
+
+        if (isNumbered) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
+            },
+          });
+        }
+
+        // Apply text formatting
+        const textStyleFields: string[] = [];
+        const textStyle: docs_v1.Schema$TextStyle = {};
+
+        if (section.bold) {
+          textStyle.bold = true;
+          textStyleFields.push('bold');
+        }
+        if (section.italic) {
+          textStyle.italic = true;
+          textStyleFields.push('italic');
+        }
+        if (section.color) {
+          const hex = section.color.replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          textStyle.foregroundColor = {
+            color: { rgbColor: { red: r, green: g, blue: b } },
+          };
+          textStyleFields.push('foregroundColor');
+        }
+
+        if (textStyleFields.length > 0) {
+          styleRequests.push({
+            updateTextStyle: {
+              range: { startIndex, endIndex: endIndex - 1 },
+              textStyle: textStyle,
+              fields: textStyleFields.join(','),
+            },
+          });
+        }
+
+        currentIndex = endIndex;
+      }
+
+      // Execute batch update - first insert text, then apply styles
+      if (requests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests },
+        });
+        log.info(`Inserted ${requests.length} text sections`);
+      }
+
+      if (styleRequests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests: styleRequests },
+        });
+        log.info(`Applied ${styleRequests.length} style updates`);
+      }
+
+      return `Successfully inserted ${args.content.length} formatted sections at index ${args.index}.`;
+
+    } catch (error: any) {
+      log.error(`Error inserting formatted content: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert formatted content: ${error.message || 'Unknown error'}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'replaceDocumentContent',
+  description: `Completely replaces the content of an existing Google Document with properly formatted content. Useful for regenerating a document with clean formatting.
+
+IMPORTANT: This will DELETE all existing content and replace it with the new formatted content.`,
+  parameters: DocumentIdParameter.extend({
+    content: FormattedContentSchema.describe('Array of formatted content sections to replace the document with'),
+  }),
+  execute: async (args, { log }) => {
+    const docs = await getDocsClient();
+    log.info(`Replacing content in document ${args.documentId} with ${args.content.length} formatted sections`);
+
+    try {
+      // Step 1: Get current document to find its length
+      const docResponse = await docs.documents.get({
+        documentId: args.documentId,
+        fields: 'body(content(endIndex))',
+      });
+
+      // Find the end index of the document
+      let endIndex = 1;
+      if (docResponse.data.body?.content) {
+        const lastElement = docResponse.data.body.content[docResponse.data.body.content.length - 1];
+        if (lastElement?.endIndex) {
+          endIndex = lastElement.endIndex;
+        }
+      }
+
+      // Step 2: Delete all existing content (if any)
+      if (endIndex > 2) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              deleteContentRange: {
+                range: { startIndex: 1, endIndex: endIndex - 1 },
+              },
+            }],
+          },
+        });
+        log.info(`Deleted existing content (indices 1-${endIndex - 1})`);
+      }
+
+      // Step 3: Insert new formatted content
+      const requests: docs_v1.Schema$Request[] = [];
+      let currentIndex = 1;
+      const styleRequests: docs_v1.Schema$Request[] = [];
+
+      for (let i = 0; i < args.content.length; i++) {
+        const section = args.content[i];
+        const text = section.text + '\n';
+        const textLength = text.length;
+        const startIndex = currentIndex;
+        const endIdx = currentIndex + textLength;
+
+        requests.push({
+          insertText: {
+            location: { index: currentIndex },
+            text: text,
+          },
+        });
+
+        let namedStyleType: string | null = null;
+        let isBullet = false;
+        let isNumbered = false;
+
+        switch (section.type) {
+          case 'title': namedStyleType = 'TITLE'; break;
+          case 'subtitle': namedStyleType = 'SUBTITLE'; break;
+          case 'heading1': namedStyleType = 'HEADING_1'; break;
+          case 'heading2': namedStyleType = 'HEADING_2'; break;
+          case 'heading3': namedStyleType = 'HEADING_3'; break;
+          case 'heading4': namedStyleType = 'HEADING_4'; break;
+          case 'bullet': isBullet = true; break;
+          case 'numbered': isNumbered = true; break;
+          default: namedStyleType = 'NORMAL_TEXT'; break;
+        }
+
+        if (namedStyleType) {
+          styleRequests.push({
+            updateParagraphStyle: {
+              range: { startIndex, endIndex: endIdx - 1 },
+              paragraphStyle: { namedStyleType },
+              fields: 'namedStyleType',
+            },
+          });
+        }
+
+        if (isBullet) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIdx - 1 },
+              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+            },
+          });
+        }
+
+        if (isNumbered) {
+          styleRequests.push({
+            createParagraphBullets: {
+              range: { startIndex, endIndex: endIdx - 1 },
+              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
+            },
+          });
+        }
+
+        const textStyleFields: string[] = [];
+        const textStyle: docs_v1.Schema$TextStyle = {};
+
+        if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
+        if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
+        if (section.color) {
+          const hex = section.color.replace('#', '');
+          const r = parseInt(hex.substring(0, 2), 16) / 255;
+          const g = parseInt(hex.substring(2, 4), 16) / 255;
+          const b = parseInt(hex.substring(4, 6), 16) / 255;
+          textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+          textStyleFields.push('foregroundColor');
+        }
+
+        if (textStyleFields.length > 0) {
+          styleRequests.push({
+            updateTextStyle: {
+              range: { startIndex, endIndex: endIdx - 1 },
+              textStyle,
+              fields: textStyleFields.join(','),
+            },
+          });
+        }
+
+        currentIndex = endIdx;
+      }
+
+      if (requests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests },
+        });
+      }
+
+      if (styleRequests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests: styleRequests },
+        });
+      }
+
+      return `Successfully replaced document content with ${args.content.length} formatted sections.`;
+
+    } catch (error: any) {
+      log.error(`Error replacing document content: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to replace document content: ${error.message || 'Unknown error'}`);
+    }
+  }
+});
+
+// === GOOGLE SLIDES TOOLS ===
+
+// --- Read Tools ---
+
+server.addTool({
+  name: 'getPresentation',
+  description: 'Gets metadata and content of a Google Slides presentation including title, slide count, dimensions, and optionally full content.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the Google Slides presentation (from URL: docs.google.com/presentation/d/PRESENTATION_ID/edit).'),
+    includeContent: z.boolean().optional().default(false).describe('If true, includes detailed content of all slides.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Getting presentation: ${args.presentationId}`);
+
+    try {
+      const presentation = await SlidesHelpers.getPresentation(slides, args.presentationId);
+
+      const result: any = {
+        presentationId: presentation.presentationId,
+        title: presentation.title || 'Untitled Presentation',
+        slideCount: presentation.slides?.length || 0,
+        locale: presentation.locale,
+        pageSize: presentation.pageSize ? {
+          width: presentation.pageSize.width?.magnitude ? SlidesHelpers.pointsFromEmu(presentation.pageSize.width.magnitude) : null,
+          height: presentation.pageSize.height?.magnitude ? SlidesHelpers.pointsFromEmu(presentation.pageSize.height.magnitude) : null,
+          unit: 'points',
+        } : null,
+        slides: presentation.slides?.map((slide, index) => ({
+          index,
+          pageObjectId: slide.objectId,
+          layoutObjectId: slide.slideProperties?.layoutObjectId,
+        })) || [],
+      };
+
+      if (args.includeContent && presentation.slides) {
+        result.slidesContent = presentation.slides.map((slide) => ({
+          pageObjectId: slide.objectId,
+          elements: slide.pageElements?.map((el) => ({
+            objectId: el.objectId,
+            type: el.shape ? 'shape' : el.image ? 'image' : el.table ? 'table' : el.line ? 'line' : el.video ? 'video' : 'other',
+            shapeType: el.shape?.shapeType,
+            hasText: !!el.shape?.text?.textElements?.length,
+          })) || [],
+        }));
+      }
+
+      return JSON.stringify(result, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting presentation: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get presentation: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'listSlides',
+  description: 'Lists all slides in a Google Slides presentation with their IDs and basic info.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the Google Slides presentation.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Listing slides in presentation: ${args.presentationId}`);
+
+    try {
+      const presentation = await SlidesHelpers.getPresentation(slides, args.presentationId);
+
+      const slideList = presentation.slides?.map((slide, index) => {
+        // Try to find a title placeholder text
+        let title = null;
+        if (slide.pageElements) {
+          for (const el of slide.pageElements) {
+            if (el.shape?.placeholder?.type === 'TITLE' || el.shape?.placeholder?.type === 'CENTERED_TITLE') {
+              const textElements = el.shape?.text?.textElements;
+              if (textElements) {
+                title = textElements
+                  .filter((te) => te.textRun?.content)
+                  .map((te) => te.textRun?.content?.trim())
+                  .join('')
+                  .trim() || null;
+              }
+              break;
+            }
+          }
+        }
+
+        return {
+          index,
+          pageObjectId: slide.objectId,
+          title: title,
+          layoutObjectId: slide.slideProperties?.layoutObjectId,
+          elementCount: slide.pageElements?.length || 0,
+        };
+      }) || [];
+
+      return JSON.stringify({
+        presentationId: args.presentationId,
+        title: presentation.title || 'Untitled Presentation',
+        slideCount: slideList.length,
+        slides: slideList,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error listing slides: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to list slides: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'getSlide',
+  description: 'Gets detailed content of one or more slides including all elements. Can fetch a single slide by ID, or multiple slides by index range.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the Google Slides presentation.'),
+    pageObjectId: z.string().optional().describe('The object ID of a single slide to retrieve. Use this OR startIndex/endIndex, not both.'),
+    startIndex: z.number().int().min(0).optional().describe('0-based start index for fetching a range of slides. Use with endIndex.'),
+    endIndex: z.number().int().min(0).optional().describe('0-based end index (exclusive) for fetching a range of slides. Use with startIndex.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+
+    // Extract text from shape elements
+    const extractText = (shape: any): string | null => {
+      if (!shape?.text?.textElements) return null;
+      return shape.text.textElements
+        .filter((te: any) => te.textRun?.content)
+        .map((te: any) => te.textRun?.content)
+        .join('')
+        .trim() || null;
+    };
+
+    // Process a single slide into response format
+    const processSlide = (slide: any, index?: number) => {
+      const elements = slide.pageElements?.map((el: any) => {
+        const element: any = {
+          objectId: el.objectId,
+          type: el.shape ? 'shape' : el.image ? 'image' : el.table ? 'table' : el.line ? 'line' : el.video ? 'video' : 'other',
+        };
+
+        if (el.shape) {
+          element.shapeType = el.shape.shapeType;
+          element.placeholderType = el.shape.placeholder?.type;
+          element.text = extractText(el.shape);
+        }
+
+        if (el.image) {
+          element.sourceUrl = el.image.sourceUrl;
+          element.contentUrl = el.image.contentUrl;
+        }
+
+        if (el.table) {
+          element.rows = el.table.rows;
+          element.columns = el.table.columns;
+        }
+
+        // Include size/position if available
+        if (el.size) {
+          element.size = {
+            width: el.size.width?.magnitude ? SlidesHelpers.pointsFromEmu(el.size.width.magnitude) : null,
+            height: el.size.height?.magnitude ? SlidesHelpers.pointsFromEmu(el.size.height.magnitude) : null,
+            unit: 'points',
+          };
+        }
+
+        if (el.transform) {
+          element.position = {
+            x: el.transform.translateX ? SlidesHelpers.pointsFromEmu(el.transform.translateX) : 0,
+            y: el.transform.translateY ? SlidesHelpers.pointsFromEmu(el.transform.translateY) : 0,
+            unit: 'points',
+          };
+        }
+
+        return element;
+      }) || [];
+
+      return {
+        index: index,
+        pageObjectId: slide.objectId,
+        layoutObjectId: slide.slideProperties?.layoutObjectId,
+        masterObjectId: slide.slideProperties?.masterObjectId,
+        elementCount: elements.length,
+        elements: elements,
+      };
+    };
+
+    try {
+      // Mode 1: Fetch single slide by pageObjectId
+      if (args.pageObjectId) {
+        log.info(`Getting slide ${args.pageObjectId} from presentation: ${args.presentationId}`);
+        const slide = await SlidesHelpers.getSlide(slides, args.presentationId, args.pageObjectId);
+        const result = processSlide(slide);
+        delete result.index; // Remove index for single slide response (backward compatibility)
+        return JSON.stringify(result, null, 2);
+      }
+
+      // Mode 2: Fetch slides by index range
+      if (args.startIndex !== undefined && args.endIndex !== undefined) {
+        if (args.startIndex >= args.endIndex) {
+          throw new UserError('startIndex must be less than endIndex.');
+        }
+
+        log.info(`Getting slides ${args.startIndex}-${args.endIndex - 1} from presentation: ${args.presentationId}`);
+        const presentation = await SlidesHelpers.getPresentation(slides, args.presentationId);
+        const allSlides = presentation.slides || [];
+        const totalSlides = allSlides.length;
+
+        if (args.startIndex >= totalSlides) {
+          throw new UserError(`startIndex (${args.startIndex}) is out of range. Presentation has ${totalSlides} slides.`);
+        }
+
+        const effectiveEndIndex = Math.min(args.endIndex, totalSlides);
+        const selectedSlides = allSlides.slice(args.startIndex, effectiveEndIndex);
+
+        const results = selectedSlides.map((slide, i) => processSlide(slide, args.startIndex! + i));
+
+        return JSON.stringify({
+          presentationId: args.presentationId,
+          requestedRange: { startIndex: args.startIndex, endIndex: args.endIndex },
+          actualRange: { startIndex: args.startIndex, endIndex: effectiveEndIndex },
+          slideCount: results.length,
+          totalSlides: totalSlides,
+          slides: results,
+        }, null, 2);
+      }
+
+      // No valid parameters provided
+      throw new UserError('Either pageObjectId OR both startIndex and endIndex must be provided.');
+
+    } catch (error: any) {
+      log.error(`Error getting slide(s): ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get slide(s): ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'mapSlide',
+  description: 'Analyzes a slide to map dimensions, element positions, and available space. Use this BEFORE adding elements to understand the layout.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the Google Slides presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide to analyze.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Mapping slide ${args.pageObjectId} in presentation: ${args.presentationId}`);
+
+    try {
+      // Get presentation for page dimensions
+      const presentation = await SlidesHelpers.getPresentation(slides, args.presentationId);
+      const pageWidth = presentation.pageSize?.width?.magnitude
+        ? SlidesHelpers.pointsFromEmu(presentation.pageSize.width.magnitude)
+        : 720;
+      const pageHeight = presentation.pageSize?.height?.magnitude
+        ? SlidesHelpers.pointsFromEmu(presentation.pageSize.height.magnitude)
+        : 540;
+
+      // Get slide content
+      const slide = await SlidesHelpers.getSlide(slides, args.presentationId, args.pageObjectId);
+
+      // Map element bounding boxes
+      const elements: any[] = [];
+      let minX = pageWidth, minY = pageHeight, maxX = 0, maxY = 0;
+
+      for (const el of slide.pageElements || []) {
+        const width = el.size?.width?.magnitude ? SlidesHelpers.pointsFromEmu(el.size.width.magnitude) : 0;
+        const height = el.size?.height?.magnitude ? SlidesHelpers.pointsFromEmu(el.size.height.magnitude) : 0;
+        const x = el.transform?.translateX ? SlidesHelpers.pointsFromEmu(el.transform.translateX) : 0;
+        const y = el.transform?.translateY ? SlidesHelpers.pointsFromEmu(el.transform.translateY) : 0;
+
+        // Extract element type and text
+        let type = 'unknown';
+        let text: string | null = null;
+        if (el.shape) {
+          type = el.shape.shapeType || 'shape';
+          if (el.shape.text?.textElements) {
+            text = el.shape.text.textElements
+              .filter((te: any) => te.textRun?.content)
+              .map((te: any) => te.textRun?.content)
+              .join('')
+              .trim() || null;
+          }
+        } else if (el.image) type = 'image';
+        else if (el.table) type = 'table';
+        else if (el.line) type = 'line';
+        else if (el.video) type = 'video';
+
+        const element = {
+          objectId: el.objectId,
+          type,
+          text: text ? (text.length > 50 ? text.substring(0, 50) + '...' : text) : null,
+          bounds: {
+            x: Math.round(x),
+            y: Math.round(y),
+            width: Math.round(width),
+            height: Math.round(height),
+            right: Math.round(x + width),
+            bottom: Math.round(y + height),
+          }
+        };
+        elements.push(element);
+
+        // Track content bounds
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x + width > maxX) maxX = x + width;
+        if (y + height > maxY) maxY = y + height;
+      }
+
+      // Calculate available margins
+      const margins = {
+        top: Math.round(minY),
+        bottom: Math.round(pageHeight - maxY),
+        left: Math.round(minX),
+        right: Math.round(pageWidth - maxX),
+      };
+
+      // Suggest safe insertion zones
+      const safeZones = {
+        topStrip: { x: 0, y: 0, width: pageWidth, height: Math.max(margins.top - 10, 40), note: 'Top margin area' },
+        bottomStrip: { x: 0, y: maxY + 10, width: pageWidth, height: Math.max(margins.bottom - 10, 40), note: 'Bottom margin area' },
+        topRight: { x: pageWidth - 100, y: 10, width: 90, height: 90, note: 'Top-right corner' },
+        bottomRight: { x: pageWidth - 100, y: pageHeight - 100, width: 90, height: 90, note: 'Bottom-right corner' },
+        bottomLeft: { x: 10, y: pageHeight - 100, width: 90, height: 90, note: 'Bottom-left corner' },
+      };
+
+      return JSON.stringify({
+        page: {
+          width: Math.round(pageWidth),
+          height: Math.round(pageHeight),
+          unit: 'points',
+        },
+        contentBounds: {
+          minX: Math.round(minX),
+          minY: Math.round(minY),
+          maxX: Math.round(maxX),
+          maxY: Math.round(maxY),
+        },
+        margins,
+        elementCount: elements.length,
+        elements,
+        safeZones,
+        tip: 'Use safeZones for adding new elements without overlap. All values in points.',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error mapping slide: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to map slide: ${error.message}`);
+    }
+  }
+});
+
+// --- Create Tools ---
+
+server.addTool({
+  name: 'createPresentation',
+  description: 'Creates a new Google Slides presentation. Returns the new presentation ID and URL.',
+  parameters: z.object({
+    title: z.string().describe('The title for the new presentation.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Creating new presentation: ${args.title}`);
+
+    try {
+      const response = await slides.presentations.create({
+        requestBody: {
+          title: args.title,
+        },
+      });
+
+      const presentation = response.data;
+      const presentationId = presentation.presentationId;
+      const url = `https://docs.google.com/presentation/d/${presentationId}/edit`;
+
+      return JSON.stringify({
+        presentationId: presentationId,
+        title: presentation.title,
+        url: url,
+        slideCount: presentation.slides?.length || 0,
+        firstSlideId: presentation.slides?.[0]?.objectId || null,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error creating presentation: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to create presentation: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'addSlide',
+  description: 'Adds a new slide to a presentation. Returns the new slide ID.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    insertionIndex: z.number().int().min(0).optional().describe('Optional 0-based index where to insert the slide. Omit to add at the end.'),
+    predefinedLayout: z.enum([
+      'BLANK', 'CAPTION_ONLY', 'TITLE', 'TITLE_AND_BODY', 'TITLE_AND_TWO_COLUMNS',
+      'TITLE_ONLY', 'SECTION_HEADER', 'SECTION_TITLE_AND_DESCRIPTION', 'ONE_COLUMN_TEXT',
+      'MAIN_POINT', 'BIG_NUMBER'
+    ]).optional().describe('Optional predefined layout type. Defaults to BLANK if not specified.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Adding slide to presentation: ${args.presentationId}`);
+
+    try {
+      const newSlideId = SlidesHelpers.generateObjectId('slide');
+      const request = SlidesHelpers.buildCreateSlideRequest(
+        args.insertionIndex,
+        args.predefinedLayout,
+        newSlideId
+      );
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        pageObjectId: newSlideId,
+        insertionIndex: args.insertionIndex ?? 'end',
+        layout: args.predefinedLayout || 'BLANK',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error adding slide: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to add slide: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'duplicateSlide',
+  description: 'Duplicates an existing slide in the presentation.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide to duplicate.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Duplicating slide ${args.pageObjectId} in presentation: ${args.presentationId}`);
+
+    try {
+      const newSlideId = SlidesHelpers.generateObjectId('slide');
+      const request = SlidesHelpers.buildDuplicateObjectRequest(args.pageObjectId, {
+        [args.pageObjectId]: newSlideId,
+      });
+
+      const response = await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        originalSlideId: args.pageObjectId,
+        newSlideId: newSlideId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error duplicating slide: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to duplicate slide: ${error.message}`);
+    }
+  }
+});
+
+// --- Element Tools ---
+
+server.addTool({
+  name: 'addTextBox',
+  description: 'Adds a text box to a slide at the specified position with optional initial text and styling.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide to add the text box to.'),
+    x: z.number().min(0).describe('X position (left edge) in points from top-left corner.'),
+    y: z.number().min(0).describe('Y position (top edge) in points from top-left corner.'),
+    width: z.number().positive().describe('Width of the text box in points.'),
+    height: z.number().positive().describe('Height of the text box in points.'),
+    text: z.string().optional().describe('Optional initial text content for the text box.'),
+    fontSize: z.number().positive().optional().describe('Font size in points (e.g., 12, 14, 18). If not specified, uses Google Slides default.'),
+    fontFamily: z.string().optional().describe('Font family name (e.g., "Arial", "Times New Roman", "Roboto").'),
+    bold: z.boolean().optional().describe('Whether the text should be bold.'),
+    italic: z.boolean().optional().describe('Whether the text should be italic.'),
+    textColor: z.string().regex(/^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/).optional().describe('Text color in hex format (e.g., "#000000" for black, "#FF0000" for red).'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Adding text box to slide ${args.pageObjectId}${args.fontSize ? ` with ${args.fontSize}pt font` : ''}`);
+
+    try {
+      const textBoxId = SlidesHelpers.generateObjectId('textbox');
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // Create the text box shape
+      requests.push(SlidesHelpers.buildCreateShapeRequest(
+        args.pageObjectId,
+        'TEXT_BOX',
+        args.x,
+        args.y,
+        args.width,
+        args.height,
+        textBoxId
+      ));
+
+      // Insert text if provided
+      if (args.text) {
+        requests.push(SlidesHelpers.buildInsertTextRequest(textBoxId, args.text, 0));
+
+        // Apply text styling if any style options are provided
+        const hasStyleOptions = args.fontSize !== undefined ||
+                                args.fontFamily !== undefined ||
+                                args.bold !== undefined ||
+                                args.italic !== undefined ||
+                                args.textColor !== undefined;
+
+        if (hasStyleOptions) {
+          const styleRequest = SlidesHelpers.buildUpdateTextStyleRequest(
+            textBoxId,
+            {
+              fontSize: args.fontSize,
+              fontFamily: args.fontFamily,
+              bold: args.bold,
+              italic: args.italic,
+              foregroundColor: args.textColor,
+            },
+            'ALL'
+          );
+          if (styleRequest) {
+            requests.push(styleRequest);
+          }
+        }
+      }
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        objectId: textBoxId,
+        position: { x: args.x, y: args.y, unit: 'points' },
+        size: { width: args.width, height: args.height, unit: 'points' },
+        hasText: !!args.text,
+        style: {
+          fontSize: args.fontSize,
+          fontFamily: args.fontFamily,
+          bold: args.bold,
+          italic: args.italic,
+          textColor: args.textColor,
+        },
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error adding text box: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to add text box: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'addShape',
+  description: 'Adds a shape (rectangle, ellipse, etc.) to a slide.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide.'),
+    shapeType: z.enum([
+      'RECTANGLE', 'ROUND_RECTANGLE', 'ELLIPSE', 'TRIANGLE', 'RIGHT_TRIANGLE',
+      'PARALLELOGRAM', 'TRAPEZOID', 'PENTAGON', 'HEXAGON', 'HEPTAGON', 'OCTAGON',
+      'STAR_4', 'STAR_5', 'STAR_6', 'STAR_8', 'STAR_10', 'STAR_12',
+      'ARROW_EAST', 'ARROW_NORTH', 'ARROW_NORTH_EAST', 'CLOUD', 'HEART', 'PLUS'
+    ]).describe('The type of shape to create.'),
+    x: z.number().min(0).describe('X position in points.'),
+    y: z.number().min(0).describe('Y position in points.'),
+    width: z.number().positive().describe('Width in points.'),
+    height: z.number().positive().describe('Height in points.'),
+    fillColor: z.string().regex(/^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/).optional().describe('Optional fill color in hex format (e.g., "#FF0000").'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Adding ${args.shapeType} shape to slide ${args.pageObjectId}`);
+
+    try {
+      const shapeId = SlidesHelpers.generateObjectId('shape');
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // Create the shape
+      requests.push(SlidesHelpers.buildCreateShapeRequest(
+        args.pageObjectId,
+        args.shapeType,
+        args.x,
+        args.y,
+        args.width,
+        args.height,
+        shapeId
+      ));
+
+      // Apply fill color if provided
+      if (args.fillColor) {
+        const fillRequest = SlidesHelpers.buildUpdateShapePropertiesRequest(shapeId, args.fillColor);
+        if (fillRequest) {
+          requests.push(fillRequest);
+        }
+      }
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        objectId: shapeId,
+        shapeType: args.shapeType,
+        position: { x: args.x, y: args.y, unit: 'points' },
+        size: { width: args.width, height: args.height, unit: 'points' },
+        fillColor: args.fillColor || null,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error adding shape: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to add shape: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'addImage',
+  description: 'Adds an image to a slide from a publicly accessible URL.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide.'),
+    imageUrl: z.string().url().describe('Publicly accessible URL of the image to insert.'),
+    x: z.number().min(0).describe('X position in points.'),
+    y: z.number().min(0).describe('Y position in points.'),
+    width: z.number().positive().describe('Width in points.'),
+    height: z.number().positive().describe('Height in points.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Adding image to slide ${args.pageObjectId}`);
+
+    try {
+      const imageId = SlidesHelpers.generateObjectId('image');
+      const request = SlidesHelpers.buildCreateImageRequest(
+        args.pageObjectId,
+        args.imageUrl,
+        args.x,
+        args.y,
+        args.width,
+        args.height,
+        imageId
+      );
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        objectId: imageId,
+        sourceUrl: args.imageUrl,
+        position: { x: args.x, y: args.y, unit: 'points' },
+        size: { width: args.width, height: args.height, unit: 'points' },
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error adding image: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to add image: ${error.message}. Ensure the URL is publicly accessible.`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'addTable',
+  description: 'Adds a table to a slide with the specified number of rows and columns.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide.'),
+    rows: z.number().int().min(1).describe('Number of rows (minimum 1).'),
+    columns: z.number().int().min(1).describe('Number of columns (minimum 1).'),
+    x: z.number().min(0).describe('X position in points.'),
+    y: z.number().min(0).describe('Y position in points.'),
+    width: z.number().positive().describe('Width in points.'),
+    height: z.number().positive().describe('Height in points.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Adding ${args.rows}x${args.columns} table to slide ${args.pageObjectId}`);
+
+    try {
+      const tableId = SlidesHelpers.generateObjectId('table');
+      const request = SlidesHelpers.buildCreateTableRequest(
+        args.pageObjectId,
+        args.rows,
+        args.columns,
+        args.x,
+        args.y,
+        args.width,
+        args.height,
+        tableId
+      );
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        objectId: tableId,
+        dimensions: { rows: args.rows, columns: args.columns },
+        position: { x: args.x, y: args.y, unit: 'points' },
+        size: { width: args.width, height: args.height, unit: 'points' },
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error adding table: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to add table: ${error.message}`);
+    }
+  }
+});
+
+// --- Modify Tools ---
+
+server.addTool({
+  name: 'deleteSlide',
+  description: 'Deletes a slide from the presentation. Cannot delete the only slide.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide to delete.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Deleting slide ${args.pageObjectId} from presentation: ${args.presentationId}`);
+
+    try {
+      // First check if this is the only slide
+      const presentation = await SlidesHelpers.getPresentation(slides, args.presentationId);
+      if (!presentation.slides || presentation.slides.length <= 1) {
+        throw new UserError('Cannot delete the only slide in a presentation. Add another slide first.');
+      }
+
+      const request = SlidesHelpers.buildDeleteObjectRequest(args.pageObjectId);
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        deletedSlideId: args.pageObjectId,
+        remainingSlides: presentation.slides.length - 1,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting slide: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete slide: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'deleteElement',
+  description: 'Deletes an element (shape, image, table) from a slide.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    objectId: z.string().describe('The object ID of the element to delete.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Deleting element ${args.objectId} from presentation: ${args.presentationId}`);
+
+    try {
+      const request = SlidesHelpers.buildDeleteObjectRequest(args.objectId);
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        deletedObjectId: args.objectId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting element: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete element: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'updateSpeakerNotes',
+  description: 'Updates the speaker notes for a slide.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide.'),
+    notes: z.string().describe('The speaker notes text content.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Updating speaker notes for slide ${args.pageObjectId}`);
+
+    try {
+      // Get the slide to find the speaker notes shape ID
+      const slide = await SlidesHelpers.getSlide(slides, args.presentationId, args.pageObjectId);
+      const notesShapeId = SlidesHelpers.getSpeakerNotesShapeId(slide);
+
+      if (!notesShapeId) {
+        throw new UserError('Could not find speaker notes shape for this slide.');
+      }
+
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // Delete existing text first (if any)
+      // We need to get the notes content length to delete properly
+      const notesPage = slide.slideProperties?.notesPage;
+      let hasExistingText = false;
+      if (notesPage?.pageElements) {
+        for (const el of notesPage.pageElements) {
+          if (el.objectId === notesShapeId && el.shape?.text?.textElements) {
+            const textLength = el.shape.text.textElements
+              .filter((te: any) => te.textRun?.content)
+              .map((te: any) => te.textRun?.content?.length || 0)
+              .reduce((a: number, b: number) => a + b, 0);
+            if (textLength > 0) {
+              hasExistingText = true;
+              requests.push(SlidesHelpers.buildDeleteTextRequest(notesShapeId, 0, textLength));
+            }
+            break;
+          }
+        }
+      }
+
+      // Insert new notes text
+      requests.push(SlidesHelpers.buildInsertTextRequest(notesShapeId, args.notes, 0));
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        slideId: args.pageObjectId,
+        notesShapeId: notesShapeId,
+        notesLength: args.notes.length,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error updating speaker notes: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to update speaker notes: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'moveSlide',
+  description: 'Moves a slide to a new position in the presentation.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    pageObjectId: z.string().describe('The object ID of the slide to move.'),
+    newIndex: z.number().int().min(0).describe('The new 0-based index position for the slide.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Moving slide ${args.pageObjectId} to index ${args.newIndex}`);
+
+    try {
+      const request = SlidesHelpers.buildUpdateSlidesPositionRequest(
+        [args.pageObjectId],
+        args.newIndex
+      );
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, [request]);
+
+      return JSON.stringify({
+        success: true,
+        slideId: args.pageObjectId,
+        newIndex: args.newIndex,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error moving slide: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to move slide: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'insertTextInElement',
+  description: 'Inserts or replaces text in a shape or text box element.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    objectId: z.string().describe('The object ID of the shape/text box to insert text into.'),
+    text: z.string().describe('The text to insert.'),
+    insertionIndex: z.number().int().min(0).optional().describe('Optional index where to insert text (0 for beginning). Omit to replace all text.'),
+    replaceAll: z.boolean().optional().default(false).describe('If true, deletes all existing text before inserting new text.'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Inserting text into element ${args.objectId}`);
+
+    try {
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // If replaceAll, we need to delete existing text first
+      // This requires knowing the current text length, which we'd need to fetch
+      // For simplicity, we'll delete a large range if replaceAll is true
+      if (args.replaceAll) {
+        // Delete all text (using a large end index - API handles out-of-bounds)
+        requests.push({
+          deleteText: {
+            objectId: args.objectId,
+            textRange: {
+              type: 'ALL',
+            },
+          },
+        });
+      }
+
+      // Insert the new text
+      requests.push(SlidesHelpers.buildInsertTextRequest(
+        args.objectId,
+        args.text,
+        args.replaceAll ? 0 : (args.insertionIndex ?? 0)
+      ));
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        objectId: args.objectId,
+        textInserted: args.text.length,
+        replacedAll: args.replaceAll,
+        insertionIndex: args.replaceAll ? 0 : (args.insertionIndex ?? 0),
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error inserting text: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to insert text: ${error.message}`);
+    }
+  }
+});
+
 // --- Server Startup ---
 async function startServer() {
 try {
 await initializeGoogleClient(); // Authorize BEFORE starting listeners
-console.error("Starting Ultimate Google Docs & Sheets MCP server...");
+console.error("Starting Ultimate Google Docs, Sheets & Slides MCP server...");
 
       // Using stdio as before
       const configToUse = {

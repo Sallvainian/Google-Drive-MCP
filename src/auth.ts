@@ -12,14 +12,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRootDir = path.resolve(__dirname, '..');
 
-const TOKEN_PATH = path.join(projectRootDir, 'token.json');
-const CREDENTIALS_PATH = path.join(projectRootDir, 'credentials.json');
+// Support custom paths via env vars for multi-account setups
+const TOKEN_PATH = process.env.TOKEN_PATH || path.join(projectRootDir, 'token.json');
+const CREDENTIALS_PATH = process.env.CREDENTIALS_PATH || path.join(projectRootDir, 'credentials.json');
 // --- End of path calculation ---
 
 const SCOPES = [
   'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/drive', // Full Drive access for listing, searching, and document discovery
-  'https://www.googleapis.com/auth/spreadsheets' // Google Sheets API access
+  'https://www.googleapis.com/auth/spreadsheets', // Google Sheets API access
+  'https://www.googleapis.com/auth/presentations' // Google Slides API access
 ];
 
 // --- NEW FUNCTION: Handles Service Account Authentication ---

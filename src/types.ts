@@ -134,3 +134,74 @@ super(message);
 this.name = "NotImplementedError";
 }
 }
+
+// === GOOGLE SLIDES SCHEMA FRAGMENTS ===
+
+export const PresentationIdParameter = z.object({
+  presentationId: z.string().describe('The ID of the Google Slides presentation (from the URL: docs.google.com/presentation/d/PRESENTATION_ID/edit).'),
+});
+
+export const PageObjectIdParameter = z.object({
+  pageObjectId: z.string().describe('The object ID of the slide/page.'),
+});
+
+export const SlidePositionParameter = z.object({
+  insertionIndex: z.number().int().min(0).optional().describe('Optional: The 0-based index where to insert the slide. Omit to add at the end.'),
+});
+
+export const ElementSizeParameter = z.object({
+  width: z.number().positive().describe('Width of the element in points.'),
+  height: z.number().positive().describe('Height of the element in points.'),
+});
+
+export const ElementPositionParameter = z.object({
+  x: z.number().min(0).describe('X position (left edge) in points from the top-left corner of the slide.'),
+  y: z.number().min(0).describe('Y position (top edge) in points from the top-left corner of the slide.'),
+});
+
+export const ShapeTypeEnum = z.enum([
+  'TEXT_BOX',
+  'RECTANGLE',
+  'ROUND_RECTANGLE',
+  'ELLIPSE',
+  'TRIANGLE',
+  'RIGHT_TRIANGLE',
+  'PARALLELOGRAM',
+  'TRAPEZOID',
+  'PENTAGON',
+  'HEXAGON',
+  'HEPTAGON',
+  'OCTAGON',
+  'STAR_4',
+  'STAR_5',
+  'STAR_6',
+  'STAR_8',
+  'STAR_10',
+  'STAR_12',
+  'ARROW_EAST',
+  'ARROW_NORTH',
+  'ARROW_NORTH_EAST',
+  'CLOUD',
+  'HEART',
+  'PLUS',
+]).describe('The type of shape to create.');
+
+export const PredefinedLayoutEnum = z.enum([
+  'BLANK',
+  'CAPTION_ONLY',
+  'TITLE',
+  'TITLE_AND_BODY',
+  'TITLE_AND_TWO_COLUMNS',
+  'TITLE_ONLY',
+  'SECTION_HEADER',
+  'SECTION_TITLE_AND_DESCRIPTION',
+  'ONE_COLUMN_TEXT',
+  'MAIN_POINT',
+  'BIG_NUMBER',
+]).describe('Predefined slide layout type.');
+
+// Type exports for Slides
+export type PresentationIdArgs = z.infer<typeof PresentationIdParameter>;
+export type PageObjectIdArgs = z.infer<typeof PageObjectIdParameter>;
+export type ElementSizeArgs = z.infer<typeof ElementSizeParameter>;
+export type ElementPositionArgs = z.infer<typeof ElementPositionParameter>;

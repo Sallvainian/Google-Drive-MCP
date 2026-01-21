@@ -1,14 +1,15 @@
-# Ultimate Google Docs, Sheets & Drive MCP Server
+# Ultimate Google Docs, Sheets, Slides & Drive MCP Server
 
 ![Demo Animation](assets/google.docs.mcp.1.gif)
 
-Connect Claude Desktop (or other MCP clients) to your Google Docs, Google Sheets, and Google Drive!
+Connect Claude Desktop (or other MCP clients) to your Google Docs, Google Sheets, Google Slides, and Google Drive!
 
 > 🔥 **Check out [15 powerful tasks](SAMPLE_TASKS.md) you can accomplish with this enhanced server!**
 > 📁 **NEW:** Complete Google Drive file management capabilities!
 > 📊 **NEW:** Full Google Sheets support for reading, writing, and managing spreadsheets!
+> 🎨 **NEW:** Full Google Slides support for creating and editing presentations!
 
-This comprehensive server uses the Model Context Protocol (MCP) and the `fastmcp` library to provide tools for reading, writing, formatting, structuring Google Documents and Spreadsheets, and managing your entire Google Drive. It acts as a powerful bridge, allowing AI assistants like Claude to interact with your documents, spreadsheets, and files programmatically with advanced capabilities.
+This comprehensive server uses the Model Context Protocol (MCP) and the `fastmcp` library to provide tools for reading, writing, formatting, structuring Google Documents, Spreadsheets, and Presentations, and managing your entire Google Drive. It acts as a powerful bridge, allowing AI assistants like Claude to interact with your documents, spreadsheets, presentations, and files programmatically with advanced capabilities.
 
 **Features:**
 
@@ -61,9 +62,18 @@ This comprehensive server uses the Model Context Protocol (MCP) and the `fastmcp
 - **File Operations:** Move (`moveFile`), copy (`copyFile`), rename (`renameFile`), delete (`deleteFile`)
 - **Document Creation:** Create new docs (`createDocument`) or from templates (`createFromTemplate`)
 
+### 🆕 Google Slides Support
+
+- **Read Presentations:** Get presentation metadata and content with `getPresentation`, list slides with `listSlides`, get detailed slide content with `getSlide`
+- **Create Presentations:** Create new presentations with `createPresentation`
+- **Slide Management:** Add slides with `addSlide`, duplicate with `duplicateSlide`, delete with `deleteSlide`, reorder with `moveSlide`
+- **Elements:** Add text boxes (`addTextBox`), shapes (`addShape`), images (`addImage`), tables (`addTable`)
+- **Content Editing:** Insert or replace text in elements with `insertTextInElement`, update speaker notes with `updateSpeakerNotes`
+- **Element Management:** Delete elements with `deleteElement`
+
 ### Integration
 
-- **Google Authentication:** Secure OAuth 2.0 authentication with full Drive, Docs, and Sheets access
+- **Google Authentication:** Secure OAuth 2.0 authentication with full Drive, Docs, Sheets, and Slides access
 - **MCP Compliant:** Designed for use with Claude and other MCP clients
 - **VS Code Integration:** [Setup guide](vscode.md) for VS Code MCP extension
 
@@ -97,6 +107,7 @@ This server needs permission to talk to Google APIs on your behalf. You'll creat
     - In the search bar at the top, type "APIs & Services" and select "Library".
     - Search for "**Google Docs API**" and click on it. Then click the "**ENABLE**" button.
     - Search for "**Google Sheets API**" and click on it. Then click the "**ENABLE**" button.
+    - Search for "**Google Slides API**" and click on it. Then click the "**ENABLE**" button.
     - Search for "**Google Drive API**" and click on it. Then click the "**ENABLE**" button (this is often needed for finding files or permissions).
 4.  **Configure OAuth Consent Screen:** This screen tells users (usually just you) what your app wants permission for.
     - On the left menu, click "APIs & Services" -> "**OAuth consent screen**".
@@ -109,6 +120,7 @@ This server needs permission to talk to Google APIs on your behalf. You'll creat
     - **Scopes:** Click "**ADD OR REMOVE SCOPES**". Search for and add the following scopes:
       - `https://www.googleapis.com/auth/documents` (Allows reading/writing docs)
       - `https://www.googleapis.com/auth/spreadsheets` (Allows reading/writing spreadsheets)
+      - `https://www.googleapis.com/auth/presentations` (Allows reading/writing presentations)
       - `https://www.googleapis.com/auth/drive.file` (Allows access to specific files opened/created by the app)
       - Click "**UPDATE**".
     - Click "**SAVE AND CONTINUE**".
