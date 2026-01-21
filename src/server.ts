@@ -1,7 +1,7 @@
 // src/server.ts
 import { FastMCP, UserError } from 'fastmcp';
 import { z } from 'zod';
-import { google, docs_v1, drive_v3, sheets_v4, slides_v1 } from 'googleapis';
+import { google, docs_v1, drive_v3, sheets_v4, slides_v1, gmail_v1 } from 'googleapis';
 import { authorize } from './auth.js';
 import { OAuth2Client } from 'google-auth-library';
 
@@ -17,21 +17,46 @@ ParagraphStyleParameters,
 ParagraphStyleArgs,
 ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
 ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
-NotImplementedError
+NotImplementedError,
+// Gmail types
+MessageIdParameter,
+ThreadIdParameter,
+DraftIdParameter,
+LabelIdParameter,
+FilterIdParameter,
+EmailRecipientsParameter,
+EmailContentParameter,
+EmailAttachmentsParameter,
+GmailSearchParameter,
+CreateLabelParameter,
+UpdateLabelParameter,
+ModifyLabelsParameter,
+BatchModifyLabelsParameter,
+CreateFilterParameter,
+FilterTemplateParameter,
+DownloadAttachmentParameter,
+BatchDeleteParameter,
+SendEmailParameter,
+DraftEmailParameter,
+LabelVisibilityParameter,
 } from './types.js';
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
 import * as SlidesHelpers from './googleSlidesApiHelpers.js';
+import * as GmailHelpers from './googleGmailApiHelpers.js';
+import * as LabelManager from './gmailLabelManager.js';
+import * as FilterManager from './gmailFilterManager.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
 let googleDrive: drive_v3.Drive | null = null;
 let googleSheets: sheets_v4.Sheets | null = null;
 let googleSlides: slides_v1.Slides | null = null;
+let googleGmail: gmail_v1.Gmail | null = null;
 
 // --- Initialization ---
 async function initializeGoogleClient() {
-if (googleDocs && googleDrive && googleSheets && googleSlides) return { authClient, googleDocs, googleDrive, googleSheets, googleSlides };
+if (googleDocs && googleDrive && googleSheets && googleSlides && googleGmail) return { authClient, googleDocs, googleDrive, googleSheets, googleSlides, googleGmail };
 if (!authClient) { // Check authClient instead of googleDocs to allow re-attempt
 try {
 console.error("Attempting to authorize Google API client...");
@@ -41,6 +66,7 @@ googleDocs = google.docs({ version: 'v1', auth: authClient });
 googleDrive = google.drive({ version: 'v3', auth: authClient });
 googleSheets = google.sheets({ version: 'v4', auth: authClient });
 googleSlides = google.slides({ version: 'v1', auth: authClient });
+googleGmail = google.gmail({ version: 'v1', auth: authClient });
 console.error("Google API client authorized successfully.");
 } catch (error) {
 console.error("FATAL: Failed to initialize Google API client:", error);
@@ -49,11 +75,12 @@ googleDocs = null;
 googleDrive = null;
 googleSheets = null;
 googleSlides = null;
+googleGmail = null;
 // Decide if server should exit or just fail tools
 throw new Error("Google client initialization failed. Cannot start server tools.");
 }
 }
-// Ensure googleDocs, googleDrive, googleSheets, and googleSlides are set if authClient is valid
+// Ensure googleDocs, googleDrive, googleSheets, googleSlides, and googleGmail are set if authClient is valid
 if (authClient && !googleDocs) {
 googleDocs = google.docs({ version: 'v1', auth: authClient });
 }
@@ -66,12 +93,15 @@ googleSheets = google.sheets({ version: 'v4', auth: authClient });
 if (authClient && !googleSlides) {
 googleSlides = google.slides({ version: 'v1', auth: authClient });
 }
-
-if (!googleDocs || !googleDrive || !googleSheets || !googleSlides) {
-throw new Error("Google Docs, Drive, Sheets, and Slides clients could not be initialized.");
+if (authClient && !googleGmail) {
+googleGmail = google.gmail({ version: 'v1', auth: authClient });
 }
 
-return { authClient, googleDocs, googleDrive, googleSheets, googleSlides };
+if (!googleDocs || !googleDrive || !googleSheets || !googleSlides || !googleGmail) {
+throw new Error("Google Docs, Drive, Sheets, Slides, and Gmail clients could not be initialized.");
+}
+
+return { authClient, googleDocs, googleDrive, googleSheets, googleSlides, googleGmail };
 }
 
 // Set up process-level unhandled error/rejection handlers to prevent crashes
@@ -125,6 +155,15 @@ if (!slides) {
 throw new UserError("Google Slides client is not initialized. Authentication might have failed during startup or lost connection.");
 }
 return slides;
+}
+
+// --- Helper to get Gmail client within tools ---
+async function getGmailClient() {
+const { googleGmail: gmail } = await initializeGoogleClient();
+if (!gmail) {
+throw new UserError("Gmail client is not initialized. Authentication might have failed during startup or lost connection.");
+}
+return gmail;
 }
 
 // === HELPER FUNCTIONS ===
@@ -4061,6 +4100,1124 @@ server.addTool({
     }
   }
 });
+
+// ========================================
+// === GMAIL TOOLS ===
+// ========================================
+
+// --- send_email ---
+server.addTool({
+  name: 'send_email',
+  description: 'Sends a new email with optional attachments. Supports plain text, HTML, and multipart/alternative formats.',
+  parameters: SendEmailParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Sending email to: ${args.to.join(', ')}`);
+
+    try {
+      const rawEmail = await GmailHelpers.createEmailWithAttachments({
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject: args.subject,
+        body: args.body,
+        htmlBody: args.htmlBody,
+        mimeType: args.mimeType,
+        attachments: args.attachments,
+        inReplyTo: args.inReplyTo,
+      });
+
+      const message = await GmailHelpers.sendEmail(gmail, rawEmail, args.threadId);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        threadId: message.threadId,
+        to: args.to,
+        subject: args.subject,
+        attachmentsCount: args.attachments?.length || 0,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error sending email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to send email: ${error.message}`);
+    }
+  }
+});
+
+// --- draft_email ---
+server.addTool({
+  name: 'draft_email',
+  description: 'Creates a new email draft with optional attachments.',
+  parameters: DraftEmailParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Creating draft for: ${args.to.join(', ')}`);
+
+    try {
+      const rawEmail = await GmailHelpers.createEmailWithAttachments({
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject: args.subject,
+        body: args.body,
+        htmlBody: args.htmlBody,
+        mimeType: args.mimeType,
+        attachments: args.attachments,
+        inReplyTo: args.inReplyTo,
+      });
+
+      const draft = await GmailHelpers.createDraft(gmail, rawEmail, args.threadId);
+
+      return JSON.stringify({
+        success: true,
+        draftId: draft.id,
+        messageId: draft.message?.id,
+        to: args.to,
+        subject: args.subject,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error creating draft: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to create draft: ${error.message}`);
+    }
+  }
+});
+
+// --- read_email ---
+server.addTool({
+  name: 'read_email',
+  description: 'Retrieves the content of a specific email message including headers, body, and attachment information.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Reading email: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.getMessage(gmail, args.messageId);
+      const formatted = GmailHelpers.formatMessage(message);
+
+      return JSON.stringify({
+        id: formatted.id,
+        threadId: formatted.threadId,
+        from: formatted.from,
+        to: formatted.to,
+        cc: formatted.cc,
+        subject: formatted.subject,
+        date: formatted.date,
+        snippet: formatted.snippet,
+        body: formatted.body,
+        hasHtmlBody: !!formatted.htmlBody,
+        attachments: formatted.attachments,
+        labels: formatted.labelIds,
+        isUnread: formatted.isUnread,
+        isStarred: formatted.isStarred,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error reading email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to read email: ${error.message}`);
+    }
+  }
+});
+
+// --- search_emails ---
+server.addTool({
+  name: 'search_emails',
+  description: 'Searches for emails using Gmail search syntax (e.g., "from:user@example.com", "is:unread", "subject:meeting").',
+  parameters: GmailSearchParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Searching emails with query: ${args.query}`);
+
+    try {
+      const results = await GmailHelpers.searchMessages(gmail, {
+        query: args.query,
+        maxResults: args.maxResults,
+        pageToken: args.pageToken,
+        includeSpamTrash: args.includeSpamTrash,
+      });
+
+      const formattedMessages = results.messages.map(msg => {
+        const headers = GmailHelpers.parseEmailHeaders(msg.payload?.headers || []);
+        return {
+          id: msg.id,
+          threadId: msg.threadId,
+          from: headers['from'],
+          subject: headers['subject'] || '(No Subject)',
+          date: headers['date'],
+          snippet: msg.snippet,
+          labels: msg.labelIds,
+        };
+      });
+
+      return JSON.stringify({
+        query: args.query,
+        resultCount: formattedMessages.length,
+        resultSizeEstimate: results.resultSizeEstimate,
+        nextPageToken: results.nextPageToken,
+        messages: formattedMessages,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error searching emails: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to search emails: ${error.message}`);
+    }
+  }
+});
+
+// --- modify_email ---
+server.addTool({
+  name: 'modify_email',
+  description: 'Modifies email labels (add or remove). Use to move emails between folders, mark as read/unread, star/unstar.',
+  parameters: ModifyLabelsParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Modifying labels for email: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.modifyMessageLabels(
+        gmail,
+        args.messageId,
+        args.addLabelIds,
+        args.removeLabelIds
+      );
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        currentLabels: message.labelIds,
+        addedLabels: args.addLabelIds || [],
+        removedLabels: args.removeLabelIds || [],
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error modifying email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to modify email: ${error.message}`);
+    }
+  }
+});
+
+// --- delete_email ---
+server.addTool({
+  name: 'delete_email',
+  description: 'Permanently deletes an email. This action cannot be undone. Use trash_email for recoverable deletion.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Permanently deleting email: ${args.messageId}`);
+
+    try {
+      await GmailHelpers.deleteMessage(gmail, args.messageId);
+
+      return JSON.stringify({
+        success: true,
+        messageId: args.messageId,
+        action: 'permanently_deleted',
+        warning: 'This action cannot be undone.',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete email: ${error.message}`);
+    }
+  }
+});
+
+// --- download_attachment ---
+server.addTool({
+  name: 'download_attachment',
+  description: 'Downloads an email attachment to a specified location.',
+  parameters: DownloadAttachmentParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Downloading attachment ${args.attachmentId} from message ${args.messageId}`);
+
+    try {
+      const result = await GmailHelpers.downloadAttachment(
+        gmail,
+        args.messageId,
+        args.attachmentId,
+        args.savePath,
+        args.filename
+      );
+
+      return JSON.stringify({
+        success: true,
+        savedTo: result.savedTo,
+        sizeBytes: result.size,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error downloading attachment: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to download attachment: ${error.message}`);
+    }
+  }
+});
+
+// --- list_email_labels ---
+server.addTool({
+  name: 'list_email_labels',
+  description: 'Retrieves all available Gmail labels (both system and user-created).',
+  parameters: z.object({}),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info('Listing all Gmail labels');
+
+    try {
+      const labels = await LabelManager.listLabels(gmail);
+
+      return JSON.stringify({
+        totalLabels: labels.length,
+        systemLabels: labels.filter(l => l.type === 'system').length,
+        userLabels: labels.filter(l => l.type === 'user').length,
+        labels: labels,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error listing labels: ${error.message}`);
+      throw new UserError(`Failed to list labels: ${error.message}`);
+    }
+  }
+});
+
+// --- create_label ---
+server.addTool({
+  name: 'create_label',
+  description: 'Creates a new Gmail label.',
+  parameters: CreateLabelParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Creating label: ${args.name}`);
+
+    try {
+      const label = await LabelManager.createLabel(gmail, {
+        name: args.name,
+        labelListVisibility: args.labelListVisibility,
+        messageListVisibility: args.messageListVisibility,
+      });
+
+      return JSON.stringify({
+        success: true,
+        label: label,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error creating label: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to create label: ${error.message}`);
+    }
+  }
+});
+
+// --- update_label ---
+server.addTool({
+  name: 'update_label',
+  description: 'Updates an existing Gmail label (rename or change visibility).',
+  parameters: z.object({
+    id: z.string().describe('ID of the label to update.'),
+    name: z.string().optional().describe('New name for the label.'),
+    labelListVisibility: z.enum(['labelShow', 'labelShowIfUnread', 'labelHide']).optional()
+      .describe('Visibility of the label in the label list.'),
+    messageListVisibility: z.enum(['show', 'hide']).optional()
+      .describe('Whether to show or hide the label in the message list.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Updating label: ${args.id}`);
+
+    try {
+      const label = await LabelManager.updateLabel(gmail, args.id, {
+        name: args.name,
+        labelListVisibility: args.labelListVisibility,
+        messageListVisibility: args.messageListVisibility,
+      });
+
+      return JSON.stringify({
+        success: true,
+        label: label,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error updating label: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to update label: ${error.message}`);
+    }
+  }
+});
+
+// --- delete_label ---
+server.addTool({
+  name: 'delete_label',
+  description: 'Deletes a Gmail label. System labels cannot be deleted.',
+  parameters: z.object({
+    id: z.string().describe('ID of the label to delete.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Deleting label: ${args.id}`);
+
+    try {
+      await LabelManager.deleteLabel(gmail, args.id);
+
+      return JSON.stringify({
+        success: true,
+        deletedLabelId: args.id,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting label: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete label: ${error.message}`);
+    }
+  }
+});
+
+// --- get_or_create_label ---
+server.addTool({
+  name: 'get_or_create_label',
+  description: 'Gets an existing label by name or creates it if it does not exist. Idempotent operation.',
+  parameters: CreateLabelParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Getting or creating label: ${args.name}`);
+
+    try {
+      const label = await LabelManager.getOrCreateLabel(gmail, {
+        name: args.name,
+        labelListVisibility: args.labelListVisibility,
+        messageListVisibility: args.messageListVisibility,
+      });
+
+      return JSON.stringify({
+        success: true,
+        label: label,
+        created: !!(await LabelManager.findLabelByName(gmail, args.name)),
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting/creating label: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get or create label: ${error.message}`);
+    }
+  }
+});
+
+// --- batch_modify_emails ---
+server.addTool({
+  name: 'batch_modify_emails',
+  description: 'Modifies labels for multiple emails in batches. More efficient than individual modifications.',
+  parameters: BatchModifyLabelsParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Batch modifying ${args.messageIds.length} emails`);
+
+    try {
+      const result = await GmailHelpers.batchModifyMessages(
+        gmail,
+        args.messageIds,
+        args.addLabelIds,
+        args.removeLabelIds,
+        args.batchSize
+      );
+
+      return JSON.stringify({
+        success: result.errors.length === 0,
+        totalMessages: args.messageIds.length,
+        processedCount: result.processed,
+        errors: result.errors,
+        addedLabels: args.addLabelIds || [],
+        removedLabels: args.removeLabelIds || [],
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error batch modifying emails: ${error.message}`);
+      throw new UserError(`Failed to batch modify emails: ${error.message}`);
+    }
+  }
+});
+
+// --- batch_delete_emails ---
+server.addTool({
+  name: 'batch_delete_emails',
+  description: 'Permanently deletes multiple emails in batches. This action cannot be undone.',
+  parameters: BatchDeleteParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Batch deleting ${args.messageIds.length} emails`);
+
+    try {
+      const result = await GmailHelpers.batchDeleteMessages(
+        gmail,
+        args.messageIds,
+        args.batchSize
+      );
+
+      return JSON.stringify({
+        success: result.errors.length === 0,
+        totalMessages: args.messageIds.length,
+        deletedCount: result.deleted,
+        errors: result.errors,
+        warning: 'Permanently deleted messages cannot be recovered.',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error batch deleting emails: ${error.message}`);
+      throw new UserError(`Failed to batch delete emails: ${error.message}`);
+    }
+  }
+});
+
+// --- create_filter ---
+server.addTool({
+  name: 'create_filter',
+  description: 'Creates a new Gmail filter with custom criteria and actions.',
+  parameters: CreateFilterParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info('Creating new Gmail filter');
+
+    try {
+      const filter = await FilterManager.createFilter(gmail, args.criteria, args.action);
+
+      return JSON.stringify({
+        success: true,
+        filter: filter,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error creating filter: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to create filter: ${error.message}`);
+    }
+  }
+});
+
+// --- list_filters ---
+server.addTool({
+  name: 'list_filters',
+  description: 'Retrieves all Gmail filters.',
+  parameters: z.object({}),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info('Listing all Gmail filters');
+
+    try {
+      const filters = await FilterManager.listFilters(gmail);
+
+      return JSON.stringify({
+        totalFilters: filters.length,
+        filters: filters,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error listing filters: ${error.message}`);
+      throw new UserError(`Failed to list filters: ${error.message}`);
+    }
+  }
+});
+
+// --- get_filter ---
+server.addTool({
+  name: 'get_filter',
+  description: 'Gets details of a specific Gmail filter.',
+  parameters: FilterIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Getting filter: ${args.filterId}`);
+
+    try {
+      const filter = await FilterManager.getFilter(gmail, args.filterId);
+
+      return JSON.stringify({
+        filter: filter,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting filter: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get filter: ${error.message}`);
+    }
+  }
+});
+
+// --- delete_filter ---
+server.addTool({
+  name: 'delete_filter',
+  description: 'Deletes a Gmail filter.',
+  parameters: FilterIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Deleting filter: ${args.filterId}`);
+
+    try {
+      await FilterManager.deleteFilter(gmail, args.filterId);
+
+      return JSON.stringify({
+        success: true,
+        deletedFilterId: args.filterId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting filter: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete filter: ${error.message}`);
+    }
+  }
+});
+
+// --- create_filter_from_template ---
+server.addTool({
+  name: 'create_filter_from_template',
+  description: 'Creates a filter using a pre-defined template for common scenarios (fromSender, withSubject, withAttachments, largeEmails, containingText, mailingList).',
+  parameters: FilterTemplateParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Creating filter from template: ${args.template}`);
+
+    try {
+      const filter = await FilterManager.createFilterFromTemplate(
+        gmail,
+        args.template,
+        args.parameters
+      );
+
+      return JSON.stringify({
+        success: true,
+        template: args.template,
+        filter: filter,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error creating filter from template: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to create filter: ${error.message}`);
+    }
+  }
+});
+
+// --- get_thread ---
+server.addTool({
+  name: 'get_thread',
+  description: 'Gets a full email conversation thread with all messages.',
+  parameters: ThreadIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Getting thread: ${args.threadId}`);
+
+    try {
+      const thread = await GmailHelpers.getThread(gmail, args.threadId);
+
+      const formattedMessages = (thread.messages || []).map(msg => {
+        const formatted = GmailHelpers.formatMessage(msg);
+        return {
+          id: formatted.id,
+          from: formatted.from,
+          to: formatted.to,
+          subject: formatted.subject,
+          date: formatted.date,
+          snippet: formatted.snippet,
+          body: formatted.body,
+          attachments: formatted.attachments.length,
+        };
+      });
+
+      return JSON.stringify({
+        threadId: thread.id,
+        messageCount: formattedMessages.length,
+        messages: formattedMessages,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting thread: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get thread: ${error.message}`);
+    }
+  }
+});
+
+// --- list_threads ---
+server.addTool({
+  name: 'list_threads',
+  description: 'Lists email threads with optional search query.',
+  parameters: z.object({
+    query: z.string().optional().describe('Gmail search query to filter threads.'),
+    maxResults: z.number().int().min(1).max(500).optional().default(10)
+      .describe('Maximum number of threads to return.'),
+    pageToken: z.string().optional().describe('Page token for pagination.'),
+    includeSpamTrash: z.boolean().optional().default(false)
+      .describe('Include threads from SPAM and TRASH.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Listing threads${args.query ? ` with query: ${args.query}` : ''}`);
+
+    try {
+      const result = await GmailHelpers.listThreads(gmail, {
+        query: args.query,
+        maxResults: args.maxResults,
+        pageToken: args.pageToken,
+        includeSpamTrash: args.includeSpamTrash,
+      });
+
+      return JSON.stringify({
+        threadCount: result.threads.length,
+        resultSizeEstimate: result.resultSizeEstimate,
+        nextPageToken: result.nextPageToken,
+        threads: result.threads.map(t => ({
+          id: t.id,
+          snippet: t.snippet,
+          historyId: t.historyId,
+        })),
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error listing threads: ${error.message}`);
+      throw new UserError(`Failed to list threads: ${error.message}`);
+    }
+  }
+});
+
+// --- reply_to_email ---
+server.addTool({
+  name: 'reply_to_email',
+  description: 'Sends a reply to an existing email, maintaining the conversation thread.',
+  parameters: z.object({
+    messageId: z.string().describe('ID of the message to reply to.'),
+    body: z.string().describe('Reply message body.'),
+    htmlBody: z.string().optional().describe('HTML version of the reply body.'),
+    mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain')
+      .describe('Content type of the reply.'),
+    cc: z.array(z.string().email()).optional().describe('Additional CC recipients.'),
+    bcc: z.array(z.string().email()).optional().describe('BCC recipients.'),
+    attachments: z.array(z.string()).optional().describe('File paths to attach.'),
+    replyAll: z.boolean().optional().default(false).describe('Reply to all recipients.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Replying to message: ${args.messageId}`);
+
+    try {
+      // Get original message to extract headers
+      const originalMessage = await GmailHelpers.getMessage(gmail, args.messageId, 'metadata');
+      const headers = GmailHelpers.parseEmailHeaders(originalMessage.payload?.headers || []);
+
+      const to = args.replyAll
+        ? [headers['from'], ...(headers['to']?.split(',').map(s => s.trim()) || [])].filter(Boolean)
+        : [headers['from']];
+
+      const subject = headers['subject']?.startsWith('Re:')
+        ? headers['subject']
+        : `Re: ${headers['subject'] || ''}`;
+
+      const messageId = headers['message-id'];
+
+      const rawEmail = await GmailHelpers.createEmailWithAttachments({
+        to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject,
+        body: args.body,
+        htmlBody: args.htmlBody,
+        mimeType: args.mimeType,
+        attachments: args.attachments,
+        inReplyTo: messageId,
+      });
+
+      const message = await GmailHelpers.sendEmail(gmail, rawEmail, originalMessage.threadId || undefined);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        threadId: message.threadId,
+        inReplyTo: args.messageId,
+        to: to,
+        subject: subject,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error replying to email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to reply to email: ${error.message}`);
+    }
+  }
+});
+
+// --- forward_email ---
+server.addTool({
+  name: 'forward_email',
+  description: 'Forwards an email to new recipients.',
+  parameters: z.object({
+    messageId: z.string().describe('ID of the message to forward.'),
+    to: z.array(z.string().email()).describe('Recipients to forward to.'),
+    additionalMessage: z.string().optional().describe('Additional message to include with the forward.'),
+    cc: z.array(z.string().email()).optional().describe('CC recipients.'),
+    bcc: z.array(z.string().email()).optional().describe('BCC recipients.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Forwarding message ${args.messageId} to: ${args.to.join(', ')}`);
+
+    try {
+      // Get original message
+      const originalMessage = await GmailHelpers.getMessage(gmail, args.messageId);
+      const formatted = GmailHelpers.formatMessage(originalMessage);
+
+      const subject = formatted.subject.startsWith('Fwd:')
+        ? formatted.subject
+        : `Fwd: ${formatted.subject}`;
+
+      let body = args.additionalMessage ? `${args.additionalMessage}\n\n` : '';
+      body += `---------- Forwarded message ---------\n`;
+      body += `From: ${formatted.from}\n`;
+      body += `Date: ${formatted.date}\n`;
+      body += `Subject: ${formatted.subject}\n`;
+      body += `To: ${formatted.to}\n\n`;
+      body += formatted.body;
+
+      const rawEmail = GmailHelpers.createSimpleEmail({
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject,
+        body,
+        mimeType: 'text/plain',
+      });
+
+      const message = await GmailHelpers.sendEmail(gmail, rawEmail);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        threadId: message.threadId,
+        forwardedFrom: args.messageId,
+        to: args.to,
+        subject: subject,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error forwarding email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to forward email: ${error.message}`);
+    }
+  }
+});
+
+// --- trash_email ---
+server.addTool({
+  name: 'trash_email',
+  description: 'Moves an email to trash. Can be restored using untrash_email.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Moving to trash: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.trashMessage(gmail, args.messageId);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        action: 'moved_to_trash',
+        canRestore: true,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error trashing email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to trash email: ${error.message}`);
+    }
+  }
+});
+
+// --- untrash_email ---
+server.addTool({
+  name: 'untrash_email',
+  description: 'Restores an email from trash.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Restoring from trash: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.untrashMessage(gmail, args.messageId);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        action: 'restored_from_trash',
+        currentLabels: message.labelIds,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error untrashing email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to untrash email: ${error.message}`);
+    }
+  }
+});
+
+// --- archive_email ---
+server.addTool({
+  name: 'archive_email',
+  description: 'Archives an email by removing it from the inbox (keeps in "All Mail").',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Archiving email: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.modifyMessageLabels(
+        gmail,
+        args.messageId,
+        undefined,
+        ['INBOX']
+      );
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        action: 'archived',
+        currentLabels: message.labelIds,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error archiving email: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to archive email: ${error.message}`);
+    }
+  }
+});
+
+// --- mark_as_read ---
+server.addTool({
+  name: 'mark_as_read',
+  description: 'Marks an email as read.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Marking as read: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.modifyMessageLabels(
+        gmail,
+        args.messageId,
+        undefined,
+        ['UNREAD']
+      );
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        action: 'marked_as_read',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error marking as read: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to mark as read: ${error.message}`);
+    }
+  }
+});
+
+// --- mark_as_unread ---
+server.addTool({
+  name: 'mark_as_unread',
+  description: 'Marks an email as unread.',
+  parameters: MessageIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Marking as unread: ${args.messageId}`);
+
+    try {
+      const message = await GmailHelpers.modifyMessageLabels(
+        gmail,
+        args.messageId,
+        ['UNREAD'],
+        undefined
+      );
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        action: 'marked_as_unread',
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error marking as unread: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to mark as unread: ${error.message}`);
+    }
+  }
+});
+
+// --- get_user_profile ---
+server.addTool({
+  name: 'get_user_profile',
+  description: 'Gets the authenticated Gmail user profile (email address and message counts).',
+  parameters: z.object({}),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info('Getting user profile');
+
+    try {
+      const profile = await GmailHelpers.getUserProfile(gmail);
+
+      return JSON.stringify({
+        emailAddress: profile.emailAddress,
+        messagesTotal: profile.messagesTotal,
+        threadsTotal: profile.threadsTotal,
+        historyId: profile.historyId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting profile: ${error.message}`);
+      throw new UserError(`Failed to get user profile: ${error.message}`);
+    }
+  }
+});
+
+// --- list_drafts ---
+server.addTool({
+  name: 'list_drafts',
+  description: 'Lists all email drafts.',
+  parameters: z.object({
+    maxResults: z.number().int().min(1).max(500).optional().default(10)
+      .describe('Maximum number of drafts to return.'),
+    pageToken: z.string().optional().describe('Page token for pagination.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info('Listing drafts');
+
+    try {
+      const result = await GmailHelpers.listDrafts(gmail, {
+        maxResults: args.maxResults,
+        pageToken: args.pageToken,
+      });
+
+      return JSON.stringify({
+        draftCount: result.drafts.length,
+        nextPageToken: result.nextPageToken,
+        drafts: result.drafts.map(d => ({
+          id: d.id,
+          messageId: d.message?.id,
+        })),
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error listing drafts: ${error.message}`);
+      throw new UserError(`Failed to list drafts: ${error.message}`);
+    }
+  }
+});
+
+// --- get_draft ---
+server.addTool({
+  name: 'get_draft',
+  description: 'Gets the content of a specific draft.',
+  parameters: DraftIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Getting draft: ${args.draftId}`);
+
+    try {
+      const draft = await GmailHelpers.getDraft(gmail, args.draftId);
+      const formatted = draft.message ? GmailHelpers.formatMessage(draft.message) : null;
+
+      return JSON.stringify({
+        draftId: draft.id,
+        message: formatted ? {
+          to: formatted.to,
+          cc: formatted.cc,
+          subject: formatted.subject,
+          body: formatted.body,
+          attachments: formatted.attachments,
+        } : null,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error getting draft: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to get draft: ${error.message}`);
+    }
+  }
+});
+
+// --- update_draft ---
+server.addTool({
+  name: 'update_draft',
+  description: 'Updates an existing draft with new content.',
+  parameters: z.object({
+    draftId: z.string().describe('ID of the draft to update.'),
+    to: z.array(z.string().email()).describe('List of recipient email addresses.'),
+    subject: z.string().describe('Email subject.'),
+    body: z.string().describe('Email body content.'),
+    htmlBody: z.string().optional().describe('HTML version of the email body.'),
+    mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain')
+      .describe('Content type of the email.'),
+    cc: z.array(z.string().email()).optional().describe('CC recipients.'),
+    bcc: z.array(z.string().email()).optional().describe('BCC recipients.'),
+  }),
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Updating draft: ${args.draftId}`);
+
+    try {
+      const rawEmail = GmailHelpers.createSimpleEmail({
+        to: args.to,
+        cc: args.cc,
+        bcc: args.bcc,
+        subject: args.subject,
+        body: args.body,
+        htmlBody: args.htmlBody,
+        mimeType: args.mimeType,
+      });
+
+      const draft = await GmailHelpers.updateDraft(gmail, args.draftId, rawEmail);
+
+      return JSON.stringify({
+        success: true,
+        draftId: draft.id,
+        messageId: draft.message?.id,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error updating draft: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to update draft: ${error.message}`);
+    }
+  }
+});
+
+// --- delete_draft ---
+server.addTool({
+  name: 'delete_draft',
+  description: 'Deletes a draft. This action cannot be undone.',
+  parameters: DraftIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Deleting draft: ${args.draftId}`);
+
+    try {
+      await GmailHelpers.deleteDraft(gmail, args.draftId);
+
+      return JSON.stringify({
+        success: true,
+        deletedDraftId: args.draftId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error deleting draft: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to delete draft: ${error.message}`);
+    }
+  }
+});
+
+// --- send_draft ---
+server.addTool({
+  name: 'send_draft',
+  description: 'Sends an existing draft as an email.',
+  parameters: DraftIdParameter,
+  execute: async (args, { log }) => {
+    const gmail = await getGmailClient();
+    log.info(`Sending draft: ${args.draftId}`);
+
+    try {
+      const message = await GmailHelpers.sendDraft(gmail, args.draftId);
+
+      return JSON.stringify({
+        success: true,
+        messageId: message.id,
+        threadId: message.threadId,
+        sentDraftId: args.draftId,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error sending draft: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to send draft: ${error.message}`);
+    }
+  }
+});
+
+// ========================================
+// === END GMAIL TOOLS ===
+// ========================================
 
 // --- Server Startup ---
 async function startServer() {

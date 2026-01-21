@@ -205,3 +205,183 @@ export type PresentationIdArgs = z.infer<typeof PresentationIdParameter>;
 export type PageObjectIdArgs = z.infer<typeof PageObjectIdParameter>;
 export type ElementSizeArgs = z.infer<typeof ElementSizeParameter>;
 export type ElementPositionArgs = z.infer<typeof ElementPositionParameter>;
+
+// === GMAIL SCHEMA FRAGMENTS ===
+
+// --- Basic Gmail Parameters ---
+export const MessageIdParameter = z.object({
+  messageId: z.string().describe('The ID of the Gmail message.'),
+});
+
+export const ThreadIdParameter = z.object({
+  threadId: z.string().describe('The ID of the Gmail thread/conversation.'),
+});
+
+export const DraftIdParameter = z.object({
+  draftId: z.string().describe('The ID of the Gmail draft.'),
+});
+
+export const LabelIdParameter = z.object({
+  labelId: z.string().describe('The ID of the Gmail label.'),
+});
+
+export const FilterIdParameter = z.object({
+  filterId: z.string().describe('The ID of the Gmail filter.'),
+});
+
+// --- Email Composition Parameters ---
+export const EmailRecipientsParameter = z.object({
+  to: z.array(z.string().email()).describe('List of recipient email addresses.'),
+  cc: z.array(z.string().email()).optional().describe('List of CC recipient email addresses.'),
+  bcc: z.array(z.string().email()).optional().describe('List of BCC recipient email addresses.'),
+});
+
+export const EmailContentParameter = z.object({
+  subject: z.string().describe('The email subject line.'),
+  body: z.string().describe('The email body content (plain text or HTML based on mimeType).'),
+  htmlBody: z.string().optional().describe('HTML version of the email body (for multipart/alternative).'),
+  mimeType: z.enum(['text/plain', 'text/html', 'multipart/alternative']).optional().default('text/plain')
+    .describe('Content type of the email body.'),
+});
+
+export const EmailAttachmentsParameter = z.object({
+  attachments: z.array(z.string()).optional().describe('List of file paths to attach to the email.'),
+});
+
+export const EmailReplyParameter = z.object({
+  threadId: z.string().optional().describe('Thread ID to reply to (maintains conversation).'),
+  inReplyTo: z.string().optional().describe('Message-ID header of the email being replied to.'),
+});
+
+// --- Search Parameters ---
+export const GmailSearchParameter = z.object({
+  query: z.string().describe('Gmail search query using Gmail search syntax (e.g., "from:user@example.com", "is:unread", "subject:meeting").'),
+  maxResults: z.number().int().min(1).max(500).optional().default(10).describe('Maximum number of results to return (1-500).'),
+  pageToken: z.string().optional().describe('Page token for pagination.'),
+  includeSpamTrash: z.boolean().optional().default(false).describe('Include messages from SPAM and TRASH in results.'),
+});
+
+// --- Label Management Parameters ---
+export const LabelVisibilityParameter = z.object({
+  labelListVisibility: z.enum(['labelShow', 'labelShowIfUnread', 'labelHide']).optional()
+    .describe('Visibility of the label in the label list.'),
+  messageListVisibility: z.enum(['show', 'hide']).optional()
+    .describe('Whether to show or hide the label in the message list.'),
+});
+
+export const CreateLabelParameter = z.object({
+  name: z.string().min(1).describe('Name for the new label.'),
+}).merge(LabelVisibilityParameter);
+
+export const UpdateLabelParameter = LabelIdParameter.extend({
+  name: z.string().min(1).optional().describe('New name for the label.'),
+}).merge(LabelVisibilityParameter);
+
+// --- Label Modification Parameters ---
+export const ModifyLabelsParameter = MessageIdParameter.extend({
+  addLabelIds: z.array(z.string()).optional().describe('List of label IDs to add to the message.'),
+  removeLabelIds: z.array(z.string()).optional().describe('List of label IDs to remove from the message.'),
+});
+
+export const BatchModifyLabelsParameter = z.object({
+  messageIds: z.array(z.string()).min(1).describe('List of message IDs to modify.'),
+  addLabelIds: z.array(z.string()).optional().describe('List of label IDs to add to all messages.'),
+  removeLabelIds: z.array(z.string()).optional().describe('List of label IDs to remove from all messages.'),
+  batchSize: z.number().int().min(1).max(1000).optional().default(50).describe('Number of messages to process in each batch.'),
+});
+
+// --- Filter Parameters ---
+export const FilterCriteriaParameter = z.object({
+  from: z.string().optional().describe('Sender email address to match.'),
+  to: z.string().optional().describe('Recipient email address to match.'),
+  subject: z.string().optional().describe('Subject text to match.'),
+  query: z.string().optional().describe('Gmail search query for advanced matching.'),
+  negatedQuery: z.string().optional().describe('Query that messages must NOT match.'),
+  hasAttachment: z.boolean().optional().describe('Match only messages with attachments.'),
+  excludeChats: z.boolean().optional().describe('Exclude chat messages from matching.'),
+  size: z.number().int().optional().describe('Message size in bytes for size-based filtering.'),
+  sizeComparison: z.enum(['unspecified', 'smaller', 'larger']).optional().describe('Size comparison operator.'),
+});
+
+export const FilterActionParameter = z.object({
+  addLabelIds: z.array(z.string()).optional().describe('Label IDs to add to matching messages.'),
+  removeLabelIds: z.array(z.string()).optional().describe('Label IDs to remove from matching messages.'),
+  forward: z.string().email().optional().describe('Email address to forward matching messages to.'),
+});
+
+export const CreateFilterParameter = z.object({
+  criteria: FilterCriteriaParameter.describe('Criteria for matching emails.'),
+  action: FilterActionParameter.describe('Actions to perform on matching emails.'),
+});
+
+// --- Filter Templates ---
+export const FilterTemplateType = z.enum([
+  'fromSender',
+  'withSubject',
+  'withAttachments',
+  'largeEmails',
+  'containingText',
+  'mailingList',
+]).describe('Pre-defined filter template type.');
+
+export const FilterTemplateParameter = z.object({
+  template: FilterTemplateType,
+  parameters: z.object({
+    senderEmail: z.string().email().optional().describe('Sender email for fromSender template.'),
+    subjectText: z.string().optional().describe('Subject text for withSubject template.'),
+    searchText: z.string().optional().describe('Search text for containingText template.'),
+    listIdentifier: z.string().optional().describe('Mailing list identifier for mailingList template.'),
+    sizeInBytes: z.number().int().optional().describe('Size threshold for largeEmails template.'),
+    labelIds: z.array(z.string()).optional().describe('Label IDs to apply.'),
+    archive: z.boolean().optional().describe('Whether to skip the inbox (archive).'),
+    markAsRead: z.boolean().optional().describe('Whether to mark as read.'),
+    markImportant: z.boolean().optional().describe('Whether to mark as important.'),
+  }).describe('Template-specific parameters.'),
+});
+
+// --- Attachment Parameters ---
+export const DownloadAttachmentParameter = MessageIdParameter.extend({
+  attachmentId: z.string().describe('The ID of the attachment to download.'),
+  savePath: z.string().optional().describe('Directory path to save the attachment.'),
+  filename: z.string().optional().describe('Custom filename for the saved attachment.'),
+});
+
+// --- Batch Operations ---
+export const BatchDeleteParameter = z.object({
+  messageIds: z.array(z.string()).min(1).describe('List of message IDs to delete.'),
+  batchSize: z.number().int().min(1).max(1000).optional().default(50).describe('Number of messages to process in each batch.'),
+});
+
+// --- Combined Email Parameters for Tools ---
+export const SendEmailParameter = EmailRecipientsParameter
+  .merge(EmailContentParameter)
+  .merge(EmailAttachmentsParameter)
+  .merge(EmailReplyParameter);
+
+export const DraftEmailParameter = EmailRecipientsParameter
+  .merge(EmailContentParameter)
+  .merge(EmailAttachmentsParameter)
+  .merge(EmailReplyParameter);
+
+// --- Type Exports for Gmail ---
+export type MessageIdArgs = z.infer<typeof MessageIdParameter>;
+export type ThreadIdArgs = z.infer<typeof ThreadIdParameter>;
+export type DraftIdArgs = z.infer<typeof DraftIdParameter>;
+export type LabelIdArgs = z.infer<typeof LabelIdParameter>;
+export type FilterIdArgs = z.infer<typeof FilterIdParameter>;
+export type EmailRecipientsArgs = z.infer<typeof EmailRecipientsParameter>;
+export type EmailContentArgs = z.infer<typeof EmailContentParameter>;
+export type EmailAttachmentsArgs = z.infer<typeof EmailAttachmentsParameter>;
+export type GmailSearchArgs = z.infer<typeof GmailSearchParameter>;
+export type CreateLabelArgs = z.infer<typeof CreateLabelParameter>;
+export type UpdateLabelArgs = z.infer<typeof UpdateLabelParameter>;
+export type ModifyLabelsArgs = z.infer<typeof ModifyLabelsParameter>;
+export type BatchModifyLabelsArgs = z.infer<typeof BatchModifyLabelsParameter>;
+export type FilterCriteriaArgs = z.infer<typeof FilterCriteriaParameter>;
+export type FilterActionArgs = z.infer<typeof FilterActionParameter>;
+export type CreateFilterArgs = z.infer<typeof CreateFilterParameter>;
+export type FilterTemplateArgs = z.infer<typeof FilterTemplateParameter>;
+export type DownloadAttachmentArgs = z.infer<typeof DownloadAttachmentParameter>;
+export type BatchDeleteArgs = z.infer<typeof BatchDeleteParameter>;
+export type SendEmailArgs = z.infer<typeof SendEmailParameter>;
+export type DraftEmailArgs = z.infer<typeof DraftEmailParameter>;
