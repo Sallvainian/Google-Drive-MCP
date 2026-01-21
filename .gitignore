@@ -10,4 +10,14 @@ token.json
 *.log
 
 # Environment variables (if you use a .env file later)
-.env* 
+.env*
+
+# Local workspace / session files
+.claude/
+.mcp.json
+.playwright-mcp/
+_bmad/
+_bmad-output/
+
+# macOS
+.DS_Store 
