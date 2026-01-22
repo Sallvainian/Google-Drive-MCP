@@ -1,7 +1,7 @@
 # Developer Guide
 
 ## Project: Google Docs MCP Server
-**Generated**: 2026-01-20
+**Generated**: 2026-01-22
 
 ---
 
@@ -54,11 +54,15 @@ npm run dev
 
 ```
 src/
-├── server.ts          # Add new tools here
-├── auth.ts            # Authentication logic
-├── types.ts           # Add new parameter schemas here
-├── googleDocsApiHelpers.ts    # Docs-specific helpers
-└── googleSheetsApiHelpers.ts  # Sheets-specific helpers
+├── server.ts                    # 92 tool definitions (main entry point)
+├── auth.ts                      # OAuth2 and service account authentication
+├── types.ts                     # Zod schemas and TypeScript types
+├── googleDocsApiHelpers.ts      # Docs API helpers (text, tables, images)
+├── googleSheetsApiHelpers.ts    # Sheets API helpers (A1 notation, ranges)
+├── googleSlidesApiHelpers.ts    # Slides API helpers (EMU conversion, elements)
+├── googleGmailApiHelpers.ts     # Gmail API helpers (MIME, attachments)
+├── gmailLabelManager.ts         # Label CRUD operations
+└── gmailFilterManager.ts        # Filter management and templates
 ```
 
 ---
@@ -312,6 +316,334 @@ await sheets.spreadsheets.values.update({
 
 ---
 
+## Working with Google Slides API
+
+### EMU (English Metric Units)
+
+Google Slides uses EMUs for precise positioning. The helper functions handle conversion:
+
+```typescript
+import { emuFromPoints, pointsFromEmu } from './googleSlidesApiHelpers.js';
+
+// Convert points to EMU (1 point = 12700 EMU)
+const emu = emuFromPoints(72);  // 72 points = 1 inch = 914400 EMU
+
+// Convert EMU to points
+const pts = pointsFromEmu(914400);  // = 72 points
+```
+
+### Standard Slide Dimensions
+
+```typescript
+// Default presentation size in points
+const STANDARD_WIDTH = 720;   // 10 inches
+const STANDARD_HEIGHT = 540;  // 7.5 inches
+
+// Common element sizes
+const FULL_WIDTH_BOX = { width: 680, height: 60, x: 20, y: 20 };
+const CENTERED_CONTENT = { width: 600, height: 400, x: 60, y: 100 };
+```
+
+### Adding Elements to Slides
+
+```typescript
+import {
+  buildCreateShapeRequest,
+  buildInsertTextRequest,
+  buildUpdateTextStyleRequest,
+  executeBatchUpdate
+} from './googleSlidesApiHelpers.js';
+
+// Create a text box
+const createShapeRequest = buildCreateShapeRequest(
+  pageId,           // Slide ID
+  'TEXT_BOX',       // Shape type
+  100,              // x position (points)
+  100,              // y position (points)
+  300,              // width (points)
+  50,               // height (points)
+  'myTextBox_001'   // Object ID (optional)
+);
+
+// Insert text into the shape
+const insertTextRequest = buildInsertTextRequest(
+  'myTextBox_001',
+  'Hello, Slides!',
+  0                 // Insertion index
+);
+
+// Style the text
+const styleRequest = buildUpdateTextStyleRequest(
+  'myTextBox_001',
+  {
+    bold: true,
+    fontSize: 24,
+    foregroundColor: '#FF0000'
+  },
+  'ALL'             // Range type: ALL, FIXED_RANGE, FROM_START_INDEX
+);
+
+await executeBatchUpdate(slides, presentationId, [
+  createShapeRequest,
+  insertTextRequest,
+  styleRequest
+]);
+```
+
+### Shape Types
+
+Supported shape types for `addShape` tool:
+
+```typescript
+const SHAPE_TYPES = [
+  'RECTANGLE', 'ROUND_RECTANGLE', 'ELLIPSE',
+  'TRIANGLE', 'RIGHT_TRIANGLE', 'PARALLELOGRAM', 'TRAPEZOID',
+  'PENTAGON', 'HEXAGON', 'HEPTAGON', 'OCTAGON',
+  'STAR_4', 'STAR_5', 'STAR_6', 'STAR_8', 'STAR_10', 'STAR_12',
+  'ARROW_EAST', 'ARROW_NORTH', 'ARROW_NORTH_EAST',
+  'CLOUD', 'HEART', 'PLUS'
+];
+```
+
+### Working with Tables
+
+```typescript
+import { buildCreateTableRequest } from './googleSlidesApiHelpers.js';
+
+// Create a 3x4 table
+const tableRequest = buildCreateTableRequest(
+  pageId,
+  3,      // rows
+  4,      // columns
+  50,     // x position
+  150,    // y position
+  620,    // width
+  300,    // height
+  'myTable_001'
+);
+```
+
+### Speaker Notes
+
+```typescript
+import { getSpeakerNotesShapeId } from './googleSlidesApiHelpers.js';
+
+// Get the speaker notes shape ID for a slide
+const slide = await getSlide(slides, presentationId, pageObjectId);
+const notesShapeId = getSpeakerNotesShapeId(slide);
+
+if (notesShapeId) {
+  // Update speaker notes
+  await executeBatchUpdate(slides, presentationId, [
+    { deleteText: { objectId: notesShapeId, textRange: { type: 'ALL' } } },
+    { insertText: { objectId: notesShapeId, text: 'New speaker notes' } }
+  ]);
+}
+```
+
+---
+
+## Working with Gmail API
+
+### Email Creation
+
+```typescript
+import {
+  createSimpleEmail,
+  createEmailWithAttachments,
+  sendEmail
+} from './googleGmailApiHelpers.js';
+
+// Simple email
+const rawEmail = createSimpleEmail({
+  to: ['recipient@example.com'],
+  subject: 'Test Email',
+  body: 'Hello from the MCP server!',
+  mimeType: 'text/plain'
+});
+
+await sendEmail(gmail, rawEmail);
+
+// Email with attachments
+const rawEmailWithAttachments = await createEmailWithAttachments({
+  to: ['recipient@example.com'],
+  subject: 'Report Attached',
+  body: '<h1>Please see attachment</h1>',
+  mimeType: 'text/html',
+  attachments: ['/path/to/report.pdf']
+});
+
+await sendEmail(gmail, rawEmailWithAttachments);
+```
+
+### MIME Type Support
+
+```typescript
+// Plain text
+{ mimeType: 'text/plain', body: 'Plain text content' }
+
+// HTML
+{ mimeType: 'text/html', body: '<h1>HTML content</h1>' }
+
+// Multipart (both plain and HTML)
+{
+  mimeType: 'multipart/alternative',
+  body: 'Plain text version',
+  htmlBody: '<h1>HTML version</h1>'
+}
+```
+
+### Search Queries
+
+Gmail search uses standard Gmail query syntax:
+
+```typescript
+import { searchMessages } from './googleGmailApiHelpers.js';
+
+// Search examples
+const results = await searchMessages(gmail, {
+  query: 'from:sender@example.com is:unread',
+  maxResults: 50,
+  includeSpamTrash: false
+});
+
+// Common query operators
+// from:email      - Messages from sender
+// to:email        - Messages to recipient
+// subject:text    - Subject contains text
+// is:unread       - Unread messages
+// is:starred      - Starred messages
+// has:attachment  - Has attachments
+// in:inbox        - In inbox
+// label:name      - Has label
+// after:YYYY/MM/DD - After date
+// before:YYYY/MM/DD - Before date
+// larger:size     - Larger than (e.g., larger:5M)
+```
+
+### Thread Handling
+
+```typescript
+import { getThread, getMessage } from './googleGmailApiHelpers.js';
+
+// Get full conversation
+const thread = await getThread(gmail, threadId);
+console.log(`Thread has ${thread.messages.length} messages`);
+
+// Reply to maintain thread
+const replyEmail = createSimpleEmail({
+  to: ['recipient@example.com'],
+  subject: 'Re: Original Subject',
+  body: 'Reply content',
+  inReplyTo: originalMessageId,  // Required for threading
+  threadId: threadId             // Required for threading
+});
+```
+
+### Label Management
+
+```typescript
+import {
+  listLabels,
+  createLabel,
+  getOrCreateLabel,
+  resolveLabelIds
+} from './gmailLabelManager.js';
+
+// List all labels
+const labels = await listLabels(gmail);
+
+// Create a new label
+const newLabel = await createLabel(gmail, {
+  name: 'My Custom Label',
+  labelListVisibility: 'labelShow',
+  messageListVisibility: 'show'
+});
+
+// Idempotent label creation (returns existing if found)
+const label = await getOrCreateLabel(gmail, { name: 'Project X' });
+
+// Resolve label names to IDs
+const ids = await resolveLabelIds(gmail, ['INBOX', 'My Custom Label']);
+```
+
+### System Labels
+
+```typescript
+import { SYSTEM_LABELS } from './gmailLabelManager.js';
+
+// System labels (cannot be deleted)
+// INBOX, SPAM, TRASH, UNREAD, STARRED, IMPORTANT,
+// SENT, DRAFT, CATEGORY_PERSONAL, CATEGORY_SOCIAL,
+// CATEGORY_PROMOTIONS, CATEGORY_UPDATES, CATEGORY_FORUMS
+```
+
+### Filter Management
+
+```typescript
+import {
+  createFilter,
+  createFilterFromTemplate,
+  listFilters
+} from './gmailFilterManager.js';
+
+// Create custom filter
+const filter = await createFilter(gmail, {
+  criteria: {
+    from: 'newsletter@example.com',
+    hasAttachment: false
+  },
+  action: {
+    addLabelIds: ['Label_123'],
+    removeLabelIds: ['INBOX']  // Archive
+  }
+});
+
+// Use template for common scenarios
+const templateFilter = await createFilterFromTemplate(
+  gmail,
+  'fromSender',
+  {
+    senderEmail: 'important@client.com',
+    labelIds: ['Label_Priority'],
+    markImportant: true
+  }
+);
+
+// Available templates:
+// - fromSender: Filter by sender email
+// - withSubject: Filter by subject text
+// - withAttachments: Filter messages with attachments
+// - largeEmails: Filter by size threshold
+// - containingText: Filter by body content
+// - mailingList: Filter mailing list messages
+```
+
+### Batch Operations
+
+```typescript
+import {
+  batchModifyMessages,
+  batchDeleteMessages
+} from './googleGmailApiHelpers.js';
+
+// Bulk label changes (processed in batches of 50 by default)
+const result = await batchModifyMessages(
+  gmail,
+  messageIds,
+  ['Label_Processed'],    // Labels to add
+  ['INBOX'],              // Labels to remove
+  50                      // Batch size
+);
+
+console.log(`Processed: ${result.successful}, Failed: ${result.failed}`);
+
+// Bulk delete (irreversible!)
+const deleteResult = await batchDeleteMessages(gmail, messageIds);
+```
+
+---
+
 ## Authentication Development
 
 ### Testing OAuth Flow
@@ -335,6 +667,18 @@ export GOOGLE_IMPERSONATE_USER="user@domain.com"
 node dist/server.js
 ```
 
+### Required OAuth Scopes
+
+```typescript
+const SCOPES = [
+  'https://www.googleapis.com/auth/documents',      // Docs read/write
+  'https://www.googleapis.com/auth/drive',          // Drive full access
+  'https://www.googleapis.com/auth/spreadsheets',   // Sheets read/write
+  'https://www.googleapis.com/auth/presentations',  // Slides read/write
+  'https://mail.google.com/',                       // Gmail full access
+];
+```
+
 ### Debugging Auth Issues
 
 ```typescript
@@ -351,16 +695,32 @@ console.error('Service account:', process.env.SERVICE_ACCOUNT_PATH);
 ### Adding a New API Scope
 
 1. Update OAuth consent screen in Google Cloud Console
-2. Add scope to `SCOPES` array in `auth.ts`:
-   ```typescript
-   const SCOPES = [
-     'https://www.googleapis.com/auth/documents',
-     'https://www.googleapis.com/auth/spreadsheets',
-     'https://www.googleapis.com/auth/drive.file',
-     'https://www.googleapis.com/auth/NEW_SCOPE'  // Add here
-   ];
-   ```
+2. Add scope to `SCOPES` array in `auth.ts`
 3. Delete `token.json` and re-authorize
+
+### Adding a New Google API
+
+1. Import API in `server.ts`:
+   ```typescript
+   import { newapi_v1 } from 'googleapis';
+   ```
+
+2. Add client variable and getter:
+   ```typescript
+   let newApiClient: newapi_v1.NewApi | null = null;
+
+   async function getNewApiClient(): Promise<newapi_v1.NewApi> {
+     const auth = await initializeGoogleClient();
+     if (!newApiClient) {
+       newApiClient = google.newapi({ version: 'v1', auth });
+     }
+     return newApiClient;
+   }
+   ```
+
+3. Create helper file `src/googleNewApiHelpers.ts`
+4. Add required scopes to `auth.ts`
+5. Implement tools using the new API
 
 ### Debugging Tool Execution
 
@@ -383,12 +743,7 @@ execute: async (args, { log }) => {
 
 1. Create a test document in Google Docs
 2. Get the document ID from the URL: `docs.google.com/document/d/DOCUMENT_ID/edit`
-3. Run specific tool:
-   ```bash
-   # Using MCP inspector or Claude Desktop
-   # Tool: readGoogleDoc
-   # Args: { "documentId": "your-test-doc-id", "format": "text" }
-   ```
+3. Run specific tool using MCP inspector or Claude Desktop
 
 ---
 
@@ -494,6 +849,20 @@ const doc1 = await docs.documents.get({ documentId });
 const doc2 = await docs.documents.get({ documentId });  // Redundant
 ```
 
+### Gmail Batch Limits
+
+Respect Gmail API quotas:
+
+```typescript
+// Good: Process in batches
+await batchModifyMessages(gmail, messageIds, labels, [], 50);
+
+// Bad: Process all at once (may hit rate limits)
+for (const id of messageIds) {
+  await modifyMessage(gmail, id, ...);  // One call per message
+}
+```
+
 ---
 
 ## Troubleshooting
@@ -505,8 +874,11 @@ const doc2 = await docs.documents.get({ documentId });  // Redundant
 | "Invalid grant" | Expired/revoked token | Delete `token.json`, re-authorize |
 | "Quota exceeded" | Too many API calls | Add delays, use batch operations |
 | "Permission denied" | Missing scope or access | Check OAuth scopes, document sharing |
-| "Invalid range" | Wrong index values | Use 1-based indexing, check document length |
+| "Invalid range" | Wrong index values | Use 1-based indexing for Docs, check document length |
 | "Not implemented" | Feature stub | Check `NotImplementedError` in tool definition |
+| "Invalid EMU" | Wrong unit conversion | Use `emuFromPoints()` helper |
+| "Thread not found" | Missing threadId | Ensure `threadId` from original message |
+| "Label not found" | Using name instead of ID | Use `resolveLabelIds()` to convert |
 
 ### Debug Mode
 
@@ -519,3 +891,38 @@ process.on('uncaughtException', (error) => {
   console.error('Stack:', error.stack);
 });
 ```
+
+---
+
+## API Quick Reference
+
+### Docs Tools (24)
+- readGoogleDoc, listDocumentTabs, appendToGoogleDoc, insertText, deleteRange
+- applyTextStyle, applyParagraphStyle, formatMatchingText
+- insertTable, insertPageBreak, insertImageFromUrl, insertLocalImage
+- listComments, getComment, addComment, replyToComment, resolveComment, deleteComment
+- createFormattedDocument, insertFormattedContent, replaceDocumentContent, createFromTemplate
+
+### Sheets Tools (8)
+- readSpreadsheet, writeSpreadsheet, appendSpreadsheetRows, clearSpreadsheetRange
+- getSpreadsheetInfo, addSpreadsheetSheet, createSpreadsheet, listGoogleSheets
+
+### Drive Tools (13)
+- listGoogleDocs, searchGoogleDocs, getRecentGoogleDocs, getDocumentInfo
+- createFolder, listFolderContents, listAllFolders, getFolderInfo
+- moveFile, copyFile, renameFile, deleteFile, createDocument
+
+### Slides Tools (16)
+- getPresentation, listSlides, getSlide, mapSlide, createPresentation
+- addSlide, duplicateSlide, addTextBox, addShape, addImage, addTable
+- deleteSlide, deleteElement, updateSpeakerNotes, moveSlide, insertTextInElement
+
+### Gmail Tools (34)
+- send_email, draft_email, read_email, search_emails, modify_email, delete_email, download_attachment
+- list_email_labels, create_label, update_label, delete_label, get_or_create_label
+- batch_modify_emails, batch_delete_emails
+- create_filter, list_filters, get_filter, delete_filter, create_filter_from_template
+- get_thread, list_threads, reply_to_email, forward_email
+- trash_email, untrash_email, archive_email, mark_as_read, mark_as_unread
+- list_drafts, get_draft, update_draft, delete_draft, send_draft
+- get_user_profile

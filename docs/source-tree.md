@@ -1,7 +1,7 @@
 # Source Tree Analysis
 
 ## Project: Google Docs MCP Server
-**Generated**: 2026-01-20
+**Generated**: 2026-01-22
 
 ---
 
@@ -9,51 +9,55 @@
 
 ```
 mcp-googledocs-server/
-├── src/                          # TypeScript source files
-│   ├── server.ts                 # Main MCP server (42 tools)
-│   ├── auth.ts                   # Authentication module
-│   ├── types.ts                  # Type definitions & Zod schemas
-│   ├── googleDocsApiHelpers.ts   # Google Docs API helper functions
-│   ├── googleSheetsApiHelpers.ts # Google Sheets API helper functions
-│   └── backup/                   # Backup files
-│       ├── auth.ts.bak
-│       └── server.ts.bak
+├── src/                              # TypeScript source files (9 files, 9,180 LOC)
+│   ├── server.ts                     # Main MCP server (92 tools) - 5,301 lines
+│   ├── auth.ts                       # Authentication module - 226 lines
+│   ├── types.ts                      # Type definitions & Zod schemas - 386 lines
+│   ├── googleDocsApiHelpers.ts       # Google Docs API helpers - 827 lines
+│   ├── googleSheetsApiHelpers.ts     # Google Sheets API helpers - 427 lines
+│   ├── googleSlidesApiHelpers.ts     # Google Slides API helpers - 595 lines
+│   ├── googleGmailApiHelpers.ts      # Gmail API helpers - 802 lines
+│   ├── gmailLabelManager.ts          # Gmail label management - 299 lines
+│   └── gmailFilterManager.ts         # Gmail filter management - 321 lines
 │
-├── tests/                        # Test files
-│   ├── helpers.test.js           # Tests for helper functions
-│   └── types.test.js             # Tests for type validation
+├── tests/                            # Test files
+│   ├── helpers.test.js               # Tests for helper functions
+│   └── types.test.js                 # Tests for type validation
 │
-├── dist/                         # Compiled JavaScript (generated)
+├── dist/                             # Compiled JavaScript (generated)
 │   ├── server.js
 │   ├── auth.js
 │   ├── types.js
 │   ├── googleDocsApiHelpers.js
-│   └── googleSheetsApiHelpers.js
+│   ├── googleSheetsApiHelpers.js
+│   ├── googleSlidesApiHelpers.js
+│   ├── googleGmailApiHelpers.js
+│   ├── gmailLabelManager.js
+│   └── gmailFilterManager.js
 │
-├── docs/                         # Generated documentation
-│   ├── index.md                  # Master index
-│   ├── architecture.md           # Architecture overview
-│   ├── source-tree.md            # This file
-│   └── project-scan-report.json  # Scan state file
+├── docs/                             # Generated documentation
+│   ├── index.md                      # Master index
+│   ├── architecture.md               # Architecture overview
+│   ├── source-tree.md                # This file
+│   ├── developer-guide.md            # Developer guide
+│   └── project-scan-report.json      # Scan state file
 │
-├── assets/                       # Static assets
-│   └── google.docs.mcp.1.gif     # Demo animation
+├── assets/                           # Static assets
+│   └── google.docs.mcp.1.gif         # Demo animation
 │
-├── pages/                        # Additional pages
-│   └── pages.md                  # (empty)
+├── node_modules/                     # Dependencies (not tracked)
 │
-├── node_modules/                 # Dependencies (not tracked)
-│
-├── index.js                      # Node.js entry point
-├── package.json                  # Project manifest
-├── package-lock.json             # Dependency lock file
-├── tsconfig.json                 # TypeScript configuration
-├── README.md                     # Main documentation
-├── SAMPLE_TASKS.md               # Example workflows
-├── CLAUDE.md                     # AI assistant instructions
-├── vscode.md                     # VS Code integration guide
-├── credentials.json              # OAuth credentials (user-provided, gitignored)
-└── token.json                    # OAuth token (generated, gitignored)
+├── index.js                          # Node.js entry point
+├── package.json                      # Project manifest
+├── package-lock.json                 # Dependency lock file
+├── tsconfig.json                     # TypeScript configuration
+├── README.md                         # Main documentation
+├── SAMPLE_TASKS.md                   # Example workflows (15 tasks)
+├── CLAUDE.md                         # AI assistant instructions
+├── vscode.md                         # VS Code integration guide
+├── .envrc                            # Environment variables (direnv)
+├── credentials.json                  # OAuth credentials (user-provided, gitignored)
+└── token.json                        # OAuth token (generated, gitignored)
 ```
 
 ---
@@ -63,65 +67,64 @@ mcp-googledocs-server/
 ### Source Files
 
 #### `src/server.ts` (Main Server)
-**Lines**: ~3000
-**Purpose**: Core MCP server implementation
+**Lines**: 5,301
+**Purpose**: Core MCP server implementation with all 92 tools
 
 **Key Sections**:
-1. **Imports & Setup** (Lines 1-30)
+1. **Imports & Setup** (Lines 1-50)
    - FastMCP, Zod, googleapis imports
-   - Global client variables
+   - Global client variables for all 5 Google APIs
 
-2. **Initialization** (Lines 30-115)
+2. **API Client Initialization** (Lines 50-150)
    - `initializeGoogleClient()`: Lazy initialization
-   - `getDocsClient()`, `getDriveClient()`, `getSheetsClient()`: Client getters
-   - Process-level error handlers
+   - `getDocsClient()`, `getDriveClient()`, `getSheetsClient()`
+   - `getSlidesClient()`, `getGmailClient()`
 
-3. **Helper Functions** (Lines 115-275)
+3. **Markdown Conversion** (Lines 150-400)
    - `convertDocsJsonToMarkdown()`: JSON to Markdown converter
    - `convertParagraphToMarkdown()`: Paragraph processing
-   - `convertTextRunToMarkdown()`: Text run processing
    - `convertTableToMarkdown()`: Table processing
 
-4. **Document Tools** (Lines 275-680)
-   - `readGoogleDoc`: Read with format options
-   - `listDocumentTabs`: Tab structure listing
-   - `appendToGoogleDoc`: Append text
-   - `insertText`: Insert at index
-   - `deleteRange`: Delete content range
+4. **Document Tools** (Lines 400-900)
+   - readGoogleDoc, listDocumentTabs
+   - appendToGoogleDoc, insertText, deleteRange
 
-5. **Formatting Tools** (Lines 680-900)
-   - `applyTextStyle`: Character formatting
-   - `applyParagraphStyle`: Paragraph formatting
+5. **Formatting Tools** (Lines 900-1200)
+   - applyTextStyle, applyParagraphStyle, formatMatchingText
 
-6. **Structure Tools** (Lines 900-1050)
-   - `insertTable`: Table creation
-   - `editTableCell`: (Not implemented)
-   - `insertPageBreak`: Page break insertion
-   - `insertImageFromUrl`: URL image insertion
-   - `insertLocalImage`: Local image upload
+6. **Structure Tools** (Lines 1200-1500)
+   - insertTable, insertPageBreak
+   - insertImageFromUrl, insertLocalImage
 
-7. **Comment Tools** (Lines 1050-1360)
-   - Full comment lifecycle management
-   - Uses Drive API v3 for comments
+7. **Comment Tools** (Lines 1500-1900)
+   - Full comment lifecycle management via Drive API v3
 
-8. **Drive Tools** (Lines 1430-2120)
-   - Document discovery
-   - Folder management
-   - File operations
+8. **Drive Tools** (Lines 1900-2500)
+   - Document/folder discovery and management
+   - File operations (move, copy, rename, delete)
 
-9. **Sheets Tools** (Lines 2260-2575)
+9. **Sheets Tools** (Lines 2500-2900)
    - Spreadsheet CRUD operations
    - Sheet/tab management
 
-10. **Enhanced Formatting** (Lines 2575-3000)
-    - Structured content creation
-    - Formatted document generation
+10. **Enhanced Formatting** (Lines 2900-3200)
+    - createFormattedDocument, insertFormattedContent
+    - replaceDocumentContent, createFromTemplate
 
-**Exported**: None (self-contained server)
+11. **Slides Tools** (Lines 3200-4200)
+    - Presentation management (16 tools)
+    - Element creation (text boxes, shapes, images, tables)
+    - Slide manipulation (add, duplicate, delete, move)
+
+12. **Gmail Tools** (Lines 4200-5301)
+    - Email operations (34 tools)
+    - Label and filter management
+    - Thread and draft handling
 
 ---
 
 #### `src/auth.ts` (Authentication)
+**Lines**: 226
 **Purpose**: Google API authentication handling
 
 **Key Functions**:
@@ -136,7 +139,7 @@ createOAuth2Client(credentials: OAuth2Credentials): OAuth2Client
 // Creates OAuth2 client instance
 
 getAccessToken(client: OAuth2Client): Promise<OAuth2Client>
-// Interactive OAuth flow
+// Interactive OAuth flow with HTTP callback server
 
 loadStoredToken(client: OAuth2Client): boolean
 // Loads existing token.json
@@ -145,47 +148,39 @@ storeToken(token: Credentials): void
 // Saves token to disk
 
 authorizeServiceAccount(): Promise<OAuth2Client>
-// Service account authentication
+// Service account authentication with impersonation
 ```
-
-**Environment Variables**:
-- `SERVICE_ACCOUNT_PATH`: Path to service account key
-- `GOOGLE_IMPERSONATE_USER`: User email for impersonation
 
 ---
 
 #### `src/types.ts` (Type Definitions)
+**Lines**: 386
 **Purpose**: Zod schemas and TypeScript types
 
 **Key Exports**:
 ```typescript
-// Parameter Schemas
-DocumentIdParameter: z.ZodObject
-RangeParameters: z.ZodObject
-OptionalRangeParameters: z.ZodObject
-TextFindParameter: z.ZodObject
-TextStyleParameters: z.ZodObject
-ParagraphStyleParameters: z.ZodObject
+// Document Schemas
+DocumentIdParameter, RangeParameters, TextFindParameter
+TextStyleParameters, ParagraphStyleParameters
 
-// Composite Schemas
-ApplyTextStyleToolParameters: z.ZodObject
-ApplyParagraphStyleToolParameters: z.ZodObject
+// Slides Schemas
+SlideElementSchema, SlidePositionSchema
+PresentationIdParameter, PageObjectIdParameter
 
-// Type Aliases
-TextStyleArgs: z.infer<typeof TextStyleParameters>
-ParagraphStyleArgs: z.infer<typeof ParagraphStyleParameters>
+// Gmail Schemas
+EmailAddressSchema, EmailComposeSchema
+FilterCriteriaSchema, FilterActionSchema
+LabelIdSchema, MessageIdSchema
 
 // Utility Functions
 validateHexColor(color: string): boolean
 hexToRgbColor(hex: string): RgbColor | null
-
-// Error Classes
-NotImplementedError extends UserError
 ```
 
 ---
 
 #### `src/googleDocsApiHelpers.ts` (Docs Helpers)
+**Lines**: 827
 **Purpose**: Google Docs API abstraction layer
 
 **Key Exports**:
@@ -211,12 +206,12 @@ getTabTextLength(documentTab): number
 createTable(docs, documentId, rows, cols, index): Promise<void>
 insertInlineImage(docs, documentId, url, index, width?, height?): Promise<void>
 uploadImageToDrive(drive, localPath, parentFolderId?): Promise<string>
-detectAndFormatLists(docs, documentId, start?, end?): Promise<void>
 ```
 
 ---
 
 #### `src/googleSheetsApiHelpers.ts` (Sheets Helpers)
+**Lines**: 427
 **Purpose**: Google Sheets API abstraction layer
 
 **Key Exports**:
@@ -235,77 +230,145 @@ clearRange(sheets, spreadsheetId, range): Promise<ClearResponse>
 // Metadata
 getSpreadsheetMetadata(sheets, spreadsheetId): Promise<Spreadsheet>
 addSheet(sheets, spreadsheetId, sheetTitle): Promise<BatchUpdateResponse>
-
-// Formatting
 formatCells(sheets, spreadsheetId, range, format): Promise<BatchUpdateResponse>
-hexToRgb(hex: string): RgbColor | null
 ```
 
 ---
 
-### Test Files
+#### `src/googleSlidesApiHelpers.ts` (Slides Helpers)
+**Lines**: 595
+**Purpose**: Google Slides API abstraction layer
 
-#### `tests/helpers.test.js`
-**Test Framework**: Node.js built-in test runner
-**Coverage**: `findTextRange` function
+**Key Exports**:
+```typescript
+// Unit Conversion
+emuFromPoints(pt: number): number  // Points to EMU
+pointsFromEmu(emu: number): number // EMU to points
 
-**Test Cases**:
-1. Find text within single text run
-2. Find nth instance of text
-3. Return null if text not found
-4. Handle text spanning multiple text runs
+// Object Management
+generateObjectId(prefix?: string): string
+executeBatchUpdate(slides, presentationId, requests): Promise<Response>
 
-**Test Method**: Mock-based testing with `mock.fn()`
+// Retrieval
+getPresentation(slides, presentationId): Promise<Presentation>
+getSlide(slides, presentationId, pageObjectId): Promise<Page>
 
----
+// Element Creation
+createTransform(x, y): AffineTransform
+createSize(width, height): Size
+createPageElementProperties(x, y, width, height): PageElementProperties
 
-#### `tests/types.test.js`
-**Coverage**: Color validation and conversion
+// Request Builders
+buildCreateSlideRequest(insertionIndex?, layout?, objectId?)
+buildCreateShapeRequest(pageId, type, x, y, width, height, objectId?)
+buildCreateImageRequest(pageId, url, x, y, width, height, objectId?)
+buildCreateTableRequest(pageId, rows, cols, x, y, width, height, objectId?)
+buildInsertTextRequest(objectId, text, insertionIndex?)
+buildUpdateTextStyleRequest(objectId, options, rangeType?, start?, end?)
+buildUpdateShapePropertiesRequest(objectId, fillColor?)
 
-**Test Cases**:
-1. `validateHexColor`:
-   - Valid hex with/without hash
-   - 3-digit and 6-digit formats
-   - Invalid formats rejection
-
-2. `hexToRgbColor`:
-   - 6-digit conversion
-   - 3-digit shorthand conversion
-   - Without hash prefix
-   - Invalid input returns null
-
----
-
-### Configuration Files
-
-#### `package.json`
-```json
-{
-  "name": "google-docs-mcp",
-  "version": "1.0.0",
-  "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "test": "node --test"
-  }
-}
+// Speaker Notes
+getSpeakerNotesShapeId(slide): string | null
 ```
 
-#### `tsconfig.json`
-```json
-{
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "strict": true,
-    "esModuleInterop": true
-  }
-}
+---
+
+#### `src/googleGmailApiHelpers.ts` (Gmail Helpers)
+**Lines**: 802
+**Purpose**: Gmail API abstraction layer
+
+**Key Exports**:
+```typescript
+// Email Validation & Encoding
+validateEmail(email: string): boolean
+encodeEmailHeader(text: string): string  // RFC 2047 MIME encoding
+base64UrlEncode(str: string): string
+base64UrlDecode(str: string): string
+getMimeType(filename: string): string
+
+// Email Creation
+createSimpleEmail(options): string
+createEmailWithAttachments(options): Promise<string>
+
+// Message Parsing
+parseEmailHeaders(headers): Record<string, string>
+extractPlainText(payload): string
+extractHtmlContent(payload): string
+extractAttachments(payload): AttachmentInfo[]
+formatMessage(message): FormattedMessage
+
+// API Operations
+sendEmail(gmail, rawEmail, threadId?): Promise<Message>
+createDraft(gmail, rawEmail, threadId?): Promise<Draft>
+getMessage(gmail, messageId, format?): Promise<Message>
+searchMessages(gmail, options): Promise<SearchResult>
+getThread(gmail, threadId, format?): Promise<Thread>
+listThreads(gmail, options): Promise<ThreadList>
+modifyMessageLabels(gmail, messageId, add?, remove?): Promise<Message>
+batchModifyMessages(gmail, ids, add?, remove?, batchSize?): Promise<BatchResult>
+deleteMessage(gmail, messageId): Promise<void>
+batchDeleteMessages(gmail, ids, batchSize?): Promise<BatchResult>
+trashMessage(gmail, messageId): Promise<Message>
+untrashMessage(gmail, messageId): Promise<Message>
+downloadAttachment(gmail, messageId, attachmentId, savePath?, filename?): Promise<SaveResult>
+getUserProfile(gmail): Promise<Profile>
+
+// Draft Management
+listDrafts(gmail, options): Promise<DraftList>
+getDraft(gmail, draftId): Promise<Draft>
+updateDraft(gmail, draftId, rawEmail): Promise<Draft>
+deleteDraft(gmail, draftId): Promise<void>
+sendDraft(gmail, draftId): Promise<Message>
+```
+
+---
+
+#### `src/gmailLabelManager.ts` (Label Management)
+**Lines**: 299
+**Purpose**: Gmail label operations
+
+**Key Exports**:
+```typescript
+// Constants
+SYSTEM_LABELS: readonly string[]  // INBOX, SPAM, TRASH, etc.
+
+// Types
+interface LabelInfo { id, name, type, visibility, counts }
+
+// Operations
+listLabels(gmail): Promise<LabelInfo[]>
+getLabel(gmail, labelId): Promise<LabelInfo>
+findLabelByName(gmail, name): Promise<LabelInfo | null>
+createLabel(gmail, options): Promise<LabelInfo>
+updateLabel(gmail, labelId, options): Promise<LabelInfo>
+deleteLabel(gmail, labelId): Promise<void>
+getOrCreateLabel(gmail, options): Promise<LabelInfo>
+resolveLabelIds(gmail, labelsOrIds): Promise<string[]>
+formatLabelsForDisplay(labels): string
+```
+
+---
+
+#### `src/gmailFilterManager.ts` (Filter Management)
+**Lines**: 321
+**Purpose**: Gmail filter operations
+
+**Key Exports**:
+```typescript
+// Types
+type FilterTemplateType = 'fromSender' | 'withSubject' | 'withAttachments' |
+                          'largeEmails' | 'containingText' | 'mailingList'
+
+interface FilterInfo { id, criteria, action }
+
+// Operations
+listFilters(gmail): Promise<FilterInfo[]>
+getFilter(gmail, filterId): Promise<FilterInfo>
+createFilter(gmail, criteria, action): Promise<FilterInfo>
+deleteFilter(gmail, filterId): Promise<void>
+createFilterFromTemplate(gmail, template, params): Promise<FilterInfo>
+formatFilterForDisplay(filter): string
+formatFiltersForDisplay(filters): string
 ```
 
 ---
@@ -314,12 +377,16 @@ hexToRgb(hex: string): RgbColor | null
 
 | File | Lines | Functions | Complexity |
 |------|-------|-----------|------------|
-| server.ts | ~3000 | 45 | High |
-| auth.ts | ~200 | 7 | Medium |
-| types.ts | ~250 | 4 | Low |
-| googleDocsApiHelpers.ts | ~500 | 15 | Medium |
-| googleSheetsApiHelpers.ts | ~430 | 12 | Medium |
-| **Total** | **~4380** | **83** | - |
+| server.ts | 5,301 | 92+ tools | High |
+| auth.ts | 226 | 7 | Medium |
+| types.ts | 386 | 4 | Low |
+| googleDocsApiHelpers.ts | 827 | 15 | Medium |
+| googleSheetsApiHelpers.ts | 427 | 12 | Medium |
+| googleSlidesApiHelpers.ts | 595 | 18 | Medium |
+| googleGmailApiHelpers.ts | 802 | 25 | Medium |
+| gmailLabelManager.ts | 299 | 10 | Low |
+| gmailFilterManager.ts | 321 | 8 | Low |
+| **Total** | **9,180** | **~191** | - |
 
 ---
 
@@ -338,9 +405,57 @@ index.js
     ├── ./googleDocsApiHelpers.js
     │   ├── googleapis
     │   └── fastmcp (UserError)
-    └── ./googleSheetsApiHelpers.js
+    ├── ./googleSheetsApiHelpers.js
+    │   ├── googleapis
+    │   └── fastmcp (UserError)
+    ├── ./googleSlidesApiHelpers.js
+    │   ├── googleapis
+    │   └── fastmcp (UserError)
+    ├── ./googleGmailApiHelpers.js
+    │   ├── googleapis
+    │   ├── fastmcp (UserError)
+    │   └── fs/promises, path
+    ├── ./gmailLabelManager.js
+    │   └── googleapis
+    └── ./gmailFilterManager.js
         ├── googleapis
-        └── fastmcp (UserError)
+        └── ./types.js
+```
+
+---
+
+## Configuration Files
+
+### `package.json`
+```json
+{
+  "name": "mcp-googledocs-server",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "dependencies": {
+    "fastmcp": "^3.24.0",
+    "google-auth-library": "^9.15.1",
+    "googleapis": "^148.0.0",
+    "zod": "^3.24.2"
+  }
+}
+```
+
+### `tsconfig.json`
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
 ```
 
 ---
@@ -351,7 +466,7 @@ index.js
 ```
 server.ts:initializeGoogleClient()
   → auth.ts:authorize()
-    → auth.ts:authorizeServiceAccount() OR auth.ts:loadStoredToken()
+    → auth.ts:authorizeServiceAccount() OR auth.ts:getAccessToken()
     → google-auth-library:OAuth2Client
 ```
 
@@ -359,9 +474,9 @@ server.ts:initializeGoogleClient()
 ```
 FastMCP Tool Call
   → server.ts:tool.execute()
-    → server.ts:getDocsClient()
-    → googleDocsApiHelpers.ts:function()
-    → googleapis:docs.documents.batchUpdate()
+    → server.ts:get[API]Client()
+    → [api]Helpers.ts:function()
+    → googleapis:[api].batchUpdate() or get()
     → Response processing
 ```
 
@@ -369,6 +484,6 @@ FastMCP Tool Call
 ```
 googleapis:API Error
   → Catch block in tool.execute()
-    → Check error.code (404, 403, etc.)
+    → Check error.code (400, 403, 404, etc.)
     → Throw fastmcp:UserError with friendly message
 ```

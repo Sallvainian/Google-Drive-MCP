@@ -1,100 +1,50 @@
 {
   "workflow_version": "1.2.0",
   "timestamps": {
-    "started": "2026-01-20T19:05:00Z",
-    "last_updated": "2026-01-20T19:30:00Z",
-    "completed": "2026-01-20T19:30:00Z"
+    "started": "2026-01-22T10:15:00Z",
+    "last_updated": "2026-01-22T10:20:00Z"
   },
-  "mode": "initial_scan",
+  "mode": "full_rescan",
   "scan_level": "exhaustive",
-  "project_root": "/Users/sallvain/Projects/mcp-googledocs-server",
-  "output_folder": "/Users/sallvain/Projects/mcp-googledocs-server/docs",
-  "completed_steps": ["step_1", "step_2", "step_3", "step_4", "step_5", "step_6", "step_7", "step_8", "step_9", "step_10"],
-  "current_step": "completed",
+  "project_root": "/Users/sallvain/Projects/Google-Drive-MCP",
+  "output_folder": "/Users/sallvain/Projects/Google-Drive-MCP/docs",
+  "completed_steps": [
+    {"step": "step_1", "status": "completed", "timestamp": "2026-01-22T10:20:00Z", "summary": "Classified as monolith library with 92 MCP tools across 5 Google APIs"}
+  ],
+  "current_step": "step_2",
   "findings": {
     "step_1": {
-      "project_type": "library",
+      "repository_type": "monolith",
+      "project_type_id": "library",
       "project_category": "MCP Server / API Integration Library",
-      "project_structure": "monolith",
       "primary_language": "TypeScript",
-      "framework": "FastMCP",
-      "total_tools": 42,
+      "framework": "FastMCP 3.24.0",
+      "total_tools": 92,
       "tool_categories": {
-        "docs_core": ["readGoogleDoc", "listDocumentTabs", "appendToGoogleDoc", "insertText", "deleteRange"],
-        "formatting": ["applyTextStyle", "applyParagraphStyle", "formatMatchingText"],
-        "structure": ["insertTable", "editTableCell", "insertPageBreak", "insertImageFromUrl", "insertLocalImage", "fixListFormatting", "findElement"],
-        "comments": ["listComments", "getComment", "addComment", "replyToComment", "resolveComment", "deleteComment"],
-        "sheets": ["readSpreadsheet", "writeSpreadsheet", "appendSpreadsheetRows", "clearSpreadsheetRange", "getSpreadsheetInfo", "addSpreadsheetSheet", "createSpreadsheet", "listGoogleSheets"],
-        "drive": ["listGoogleDocs", "searchGoogleDocs", "getRecentGoogleDocs", "getDocumentInfo", "createFolder", "listFolderContents", "listAllFolders", "getFolderInfo", "moveFile", "copyFile", "renameFile", "deleteFile", "createDocument", "createFromTemplate"],
-        "enhanced_formatting": ["createFormattedDocument", "insertFormattedContent", "replaceDocumentContent"]
+        "docs_core": 5,
+        "formatting": 3,
+        "structure": 7,
+        "comments": 6,
+        "drive": 14,
+        "sheets": 8,
+        "enhanced_formatting": 3,
+        "slides": 16,
+        "gmail": 34
       },
-      "source_files": [
-        "src/server.ts",
-        "src/auth.ts",
-        "src/types.ts",
-        "src/googleDocsApiHelpers.ts",
-        "src/googleSheetsApiHelpers.ts"
-      ],
-      "test_files": [
-        "tests/helpers.test.js",
-        "tests/types.test.js"
-      ],
-      "key_dependencies": ["fastmcp", "googleapis", "zod", "google-auth-library"],
-      "authentication_methods": ["OAuth2 (User Consent)", "Service Account (Domain-Wide Delegation)"],
-      "api_integrations": ["Google Docs API v1", "Google Sheets API v4", "Google Drive API v3"]
-    },
-    "step_2": {
-      "existing_documentation": [
-        {"file": "README.md", "lines": 505, "coverage": "high", "purpose": "Setup and usage guide"},
-        {"file": "SAMPLE_TASKS.md", "lines": 231, "coverage": "high", "purpose": "15 example workflows"},
-        {"file": "CLAUDE.md", "lines": 50, "coverage": "medium", "purpose": "AI assistant instructions"},
-        {"file": "vscode.md", "lines": 169, "coverage": "high", "purpose": "VS Code integration"}
-      ],
-      "assets": ["assets/google.docs.mcp.1.gif"]
-    },
-    "step_3": {
-      "technology_stack": {
-        "runtime": "Node.js 18+",
-        "language": "TypeScript 5.x",
-        "framework": "FastMCP 0.3.x",
-        "api_client": "googleapis 148.x",
-        "validation": "Zod 3.x",
-        "auth": "google-auth-library 9.x"
-      }
-    },
-    "step_4": {
-      "project_type_analysis": "library",
-      "critical_directories": ["src"],
-      "entry_points": ["index.js", "dist/server.js"],
-      "build_system": "TypeScript compiler (tsc)"
-    },
-    "step_5": {
-      "total_loc": 4380,
-      "files_analyzed": 5,
-      "functions_found": 83
-    },
-    "step_6": {
-      "dev_commands": {
-        "build": "npm run build",
-        "test": "npm test",
-        "start": "npm start"
-      },
-      "config_files": ["package.json", "tsconfig.json"]
-    },
-    "step_7": {
-      "multi_part": false,
-      "integration_type": "monolith"
-    },
-    "step_8_to_10": {
-      "documentation_generated": true
+      "source_files_count": 9,
+      "total_loc": 9180,
+      "api_integrations": [
+        "Google Docs API v1",
+        "Google Drive API v3",
+        "Google Sheets API v4",
+        "Google Slides API v1",
+        "Gmail API v1"
+      ]
     }
   },
-  "outputs_generated": [
-    "project-scan-report.json",
-    "index.md",
-    "architecture.md",
-    "source-tree.md",
-    "developer-guide.md"
+  "project_types": [
+    {"part_id": "main", "project_type_id": "library", "display_name": "MCP Server Library"}
   ],
-  "resume_instructions": "Workflow completed successfully"
+  "outputs_generated": ["project-scan-report.json"],
+  "resume_instructions": "Starting step 2 - discovering existing documentation"
 }
