@@ -929,23 +929,78 @@ paragraphStyle: ParagraphStyleParameters.optional().describe("Optional: Paragrap
 // cellBackgroundColor: z.string().optional()... // Cell-specific styles are complex
 }),
 execute: async (args, { log }) => {
-const docs = await getDocsClient();
-log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting at ${args.tableStartIndex}, doc ${args.documentId}`);
+        const docs = await getDocsClient();
+        log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting at ${args.tableStartIndex}, doc ${args.documentId}`);
 
-        // TODO: Implement complex logic
-        // 1. Find the cell's content range based on tableStartIndex, rowIndex, columnIndex. This is NON-TRIVIAL.
-        //    Requires getting the document, finding the table element, iterating through rows/cells to calculate indices.
-        // 2. If textContent is provided, generate a DeleteContentRange request for the cell's current content.
-        // 3. Generate an InsertText request for the new textContent at the cell's start index.
-        // 4. If textStyle is provided, generate UpdateTextStyle requests for the new text range.
-        // 5. If paragraphStyle is provided, generate UpdateParagraphStyle requests for the cell's paragraph range.
-        // 6. Execute batch update.
+        try {
+            // Step 1: Get cell range
+            const cellRange = await GDocsHelpers.getTableCellRange(
+                docs, args.documentId, args.tableStartIndex, args.rowIndex, args.columnIndex
+            );
 
-        log.error("editTableCell is not implemented due to complexity of finding cell indices.");
-        throw new NotImplementedError("Editing table cells is complex and not yet implemented.");
-        // return `Edit request for cell (${args.rowIndex}, ${args.columnIndex}) submitted (Not Implemented).`;
+            if (!cellRange) {
+                throw new UserError(`Could not find cell at row ${args.rowIndex}, column ${args.columnIndex}`);
+            }
+
+            const requests: docs_v1.Schema$Request[] = [];
+            let newTextEndIndex = cellRange.contentStartIndex;
+
+            // Step 2: Replace content if provided
+            if (args.textContent !== undefined) {
+                // Delete existing content (if any exists beyond the start)
+                if (cellRange.contentEndIndex > cellRange.contentStartIndex) {
+                    requests.push({
+                        deleteContentRange: {
+                            range: {
+                                startIndex: cellRange.contentStartIndex,
+                                endIndex: cellRange.contentEndIndex
+                            }
+                        }
+                    });
+                }
+                // Insert new text
+                if (args.textContent.length > 0) {
+                    requests.push({
+                        insertText: {
+                            location: { index: cellRange.contentStartIndex },
+                            text: args.textContent
+                        }
+                    });
+                    newTextEndIndex = cellRange.contentStartIndex + args.textContent.length;
+                }
+            } else {
+                newTextEndIndex = cellRange.contentEndIndex;
+            }
+
+            // Step 3: Apply text style
+            if (args.textStyle && newTextEndIndex > cellRange.contentStartIndex) {
+                const styleReq = GDocsHelpers.buildUpdateTextStyleRequest(
+                    cellRange.contentStartIndex, newTextEndIndex, args.textStyle
+                );
+                if (styleReq) requests.push(styleReq.request);
+            }
+
+            // Step 4: Apply paragraph style
+            if (args.paragraphStyle && newTextEndIndex > cellRange.contentStartIndex) {
+                const paraReq = GDocsHelpers.buildUpdateParagraphStyleRequest(
+                    cellRange.contentStartIndex, newTextEndIndex, args.paragraphStyle
+                );
+                if (paraReq) requests.push(paraReq.request);
+            }
+
+            // Step 5: Execute batch
+            if (requests.length === 0) {
+                return "No changes specified for the cell.";
+            }
+
+            await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+            return `Successfully edited cell (${args.rowIndex}, ${args.columnIndex}).`;
+        } catch (error: any) {
+            log.error(`Error editing cell (${args.rowIndex}, ${args.columnIndex}): ${error.message || error}`);
+            if (error instanceof UserError) throw error;
+            throw new UserError(`Failed to edit table cell: ${error.message || 'Unknown error'}`);
+        }
     }
-
 });
 
 server.addTool({

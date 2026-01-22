@@ -8,7 +8,7 @@ FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 |----------|-------|----------|
 | Docs | 5 | `readGoogleDoc`, `appendToGoogleDoc`, `insertText`, `deleteRange`, `listDocumentTabs` |
 | Formatting | 3 | `applyTextStyle`, `applyParagraphStyle`, `formatMatchingText` |
-| Structure | 7 | `insertTable`, `insertPageBreak`, `insertImageFromUrl`, `insertLocalImage`, `editTableCell`*, `findElement`*, `fixListFormatting`* |
+| Structure | 7 | `insertTable`, `insertPageBreak`, `insertImageFromUrl`, `insertLocalImage`, `editTableCell`, `findElement`*, `fixListFormatting`* |
 | Comments | 6 | `listComments`, `getComment`, `addComment`, `replyToComment`, `resolveComment`, `deleteComment` |
 | Sheets | 8 | `readSpreadsheet`, `writeSpreadsheet`, `appendSpreadsheetRows`, `clearSpreadsheetRange`, `createSpreadsheet`, `listGoogleSheets` |
 | Drive | 13 | `listGoogleDocs`, `searchGoogleDocs`, `getDocumentInfo`, `createFolder`, `moveFile`, `copyFile`, `createDocument` |
@@ -74,7 +74,6 @@ FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 ### Google Docs
 - **Comment anchoring:** Programmatically created comments appear in "All Comments" but aren't visibly anchored to text in the UI
 - **Resolved status:** May not persist in Google Docs UI (Drive API limitation)
-- **editTableCell:** Not implemented (complex cell index calculation)
 - **fixListFormatting:** Experimental, may not work reliably
 
 ### Gmail

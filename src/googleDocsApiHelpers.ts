@@ -379,6 +379,123 @@ style: ParagraphStyleArgs
     return { request, fields: fieldsToUpdate };
 }
 
+// --- Table Cell Range Helper ---
+
+/**
+ * Gets the content range of a specific table cell
+ * @param docs - Google Docs API client
+ * @param documentId - The document ID
+ * @param tableStartIndex - The start index of the table element
+ * @param rowIndex - 0-based row index
+ * @param columnIndex - 0-based column index
+ * @returns Object with cell and content boundaries, or null if not found
+ */
+export async function getTableCellRange(
+    docs: Docs,
+    documentId: string,
+    tableStartIndex: number,
+    rowIndex: number,
+    columnIndex: number
+): Promise<{
+    cellStartIndex: number;
+    cellEndIndex: number;
+    contentStartIndex: number;
+    contentEndIndex: number;
+} | null> {
+    try {
+        // Fetch document structure with table details
+        const res = await docs.documents.get({
+            documentId,
+            fields: 'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex))))))))',
+        });
+
+        if (!res.data.body?.content) {
+            console.warn(`No content found in document ${documentId}`);
+            return null;
+        }
+
+        // Find the table element at the specified start index
+        let table: any = null;
+        for (const element of res.data.body.content) {
+            if (element.startIndex === tableStartIndex && element.table) {
+                table = element.table;
+                break;
+            }
+        }
+
+        if (!table) {
+            throw new UserError(`No table found at index ${tableStartIndex}. Use readGoogleDoc with format: json to find table indices.`);
+        }
+
+        // Validate row bounds
+        const tableRows = table.tableRows || [];
+        if (rowIndex < 0 || rowIndex >= tableRows.length) {
+            throw new UserError(`Row index ${rowIndex} out of bounds. Table has ${tableRows.length} rows (0-${tableRows.length - 1}).`);
+        }
+
+        const row = tableRows[rowIndex];
+        const tableCells = row.tableCells || [];
+
+        // Validate column bounds
+        if (columnIndex < 0 || columnIndex >= tableCells.length) {
+            throw new UserError(`Column index ${columnIndex} out of bounds. Row has ${tableCells.length} columns (0-${tableCells.length - 1}).`);
+        }
+
+        const cell = tableCells[columnIndex];
+        const cellStartIndex = cell.startIndex;
+        const cellEndIndex = cell.endIndex;
+
+        if (cellStartIndex === undefined || cellEndIndex === undefined) {
+            console.warn(`Cell at (${rowIndex}, ${columnIndex}) missing index data`);
+            return null;
+        }
+
+        // Calculate content range from paragraph elements in the cell
+        // Each cell contains at least one paragraph with at least one newline
+        let contentStartIndex = cellStartIndex;
+        let contentEndIndex = cellStartIndex;
+
+        if (cell.content && cell.content.length > 0) {
+            // Get the first paragraph's first element start
+            const firstPara = cell.content[0];
+            if (firstPara.paragraph?.elements && firstPara.paragraph.elements.length > 0) {
+                contentStartIndex = firstPara.paragraph.elements[0].startIndex || cellStartIndex;
+            }
+
+            // Get the last paragraph's last element end
+            const lastPara = cell.content[cell.content.length - 1];
+            if (lastPara.paragraph?.elements && lastPara.paragraph.elements.length > 0) {
+                const elements = lastPara.paragraph.elements;
+                const lastElement = elements[elements.length - 1];
+                contentEndIndex = lastElement.endIndex || cellStartIndex;
+            }
+        }
+
+        // The content end typically includes a trailing newline - preserve it by stopping one char before
+        // If contentEndIndex > contentStartIndex, the actual editable content is contentStart to contentEnd - 1
+        // But we need to handle the case where the cell only contains a newline
+        if (contentEndIndex > contentStartIndex) {
+            contentEndIndex = contentEndIndex - 1; // Exclude trailing newline
+        }
+
+        console.log(`Found cell (${rowIndex}, ${columnIndex}): cell=${cellStartIndex}-${cellEndIndex}, content=${contentStartIndex}-${contentEndIndex}`);
+
+        return {
+            cellStartIndex,
+            cellEndIndex,
+            contentStartIndex,
+            contentEndIndex
+        };
+
+    } catch (error: any) {
+        if (error instanceof UserError) throw error;
+        console.error(`Error getting table cell range: ${error.message || 'Unknown error'}`);
+        if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}).`);
+        if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
+        throw new Error(`Failed to get table cell range: ${error.message || 'Unknown error'}`);
+    }
+}
+
 // --- Specific Feature Helpers ---
 
 export async function createTable(docs: Docs, documentId: string, rows: number, columns: number, index: number): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
