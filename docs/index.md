@@ -1,7 +1,7 @@
 # Google Docs MCP Server - Documentation Index
 
 **Version**: 1.0.0
-**Generated**: 2026-01-20
+**Generated**: 2026-01-22
 **Project Type**: MCP Server / Library
 
 ---
@@ -16,56 +16,37 @@
 | [README](../README.md) | Setup instructions, usage examples |
 | [Sample Tasks](../SAMPLE_TASKS.md) | 15 example workflows |
 | [VS Code Guide](../vscode.md) | VS Code MCP extension integration |
+| [CLAUDE.md](../CLAUDE.md) | AI assistant quick reference |
 
 ---
 
 ## Project Summary
 
-The **Google Docs MCP Server** is a Model Context Protocol server that provides **42 tools** for interacting with Google Workspace APIs. It enables AI assistants to programmatically manage Google Docs, Sheets, and Drive.
+The **Google Docs MCP Server** is a Model Context Protocol server that provides **92 tools** for interacting with Google Workspace APIs. It enables AI assistants to programmatically manage Google Docs, Sheets, Slides, Drive, and Gmail.
 
 ### Key Statistics
 
 | Metric | Value |
 |--------|-------|
-| Total Tools | 42 |
-| Source Files | 5 TypeScript files |
+| Total Tools | 92 |
+| Source Files | 9 TypeScript files |
 | Test Files | 2 test files |
-| Total LOC | ~4,400 |
-| Dependencies | 4 runtime, 2 dev |
-| API Integrations | Google Docs v1, Sheets v4, Drive v3 |
+| Total LOC | 9,180 |
+| Dependencies | 4 runtime |
+| API Integrations | 5 (Docs v1, Sheets v4, Slides v1, Drive v3, Gmail v1) |
 
 ---
 
 ## Tool Categories
 
-### Document Operations (5 tools)
-- `readGoogleDoc` - Read document content in text, JSON, or markdown format
-- `listDocumentTabs` - List all tabs in a document
-- `appendToGoogleDoc` - Append text to document end
-- `insertText` - Insert text at specific position
-- `deleteRange` - Delete content in a range
-
-### Formatting (3 tools)
-- `applyTextStyle` - Apply character formatting (bold, italic, colors)
-- `applyParagraphStyle` - Apply paragraph formatting (alignment, spacing)
-- `formatMatchingText` - Find and format specific text
-
-### Document Structure (7 tools)
-- `insertTable` - Create tables
-- `insertPageBreak` - Insert page breaks
-- `insertImageFromUrl` - Insert image from URL
-- `insertLocalImage` - Upload and insert local image
-- `editTableCell` - Edit table cells *(not implemented)*
-- `fixListFormatting` - Auto-format lists *(experimental)*
-- `findElement` - Find elements *(not implemented)*
-
-### Comments (6 tools)
-- `listComments` - List all comments
-- `getComment` - Get comment with replies
-- `addComment` - Add comment to text range
-- `replyToComment` - Reply to comment
-- `resolveComment` - Mark as resolved
-- `deleteComment` - Delete comment
+### Document Operations (24 tools)
+| Category | Count | Examples |
+|----------|-------|----------|
+| Access & Editing | 5 | `readGoogleDoc`, `appendToGoogleDoc`, `insertText` |
+| Formatting | 3 | `applyTextStyle`, `applyParagraphStyle`, `formatMatchingText` |
+| Structure | 7 | `insertTable`, `insertPageBreak`, `insertImageFromUrl` |
+| Comments | 6 | `listComments`, `addComment`, `replyToComment` |
+| Enhanced | 4 | `createFormattedDocument`, `replaceDocumentContent` |
 
 ### Google Sheets (8 tools)
 - `readSpreadsheet` - Read data from range
@@ -77,26 +58,30 @@ The **Google Docs MCP Server** is a Model Context Protocol server that provides 
 - `createSpreadsheet` - Create new spreadsheet
 - `listGoogleSheets` - List spreadsheets
 
-### Google Drive (14 tools)
-- `listGoogleDocs` - List documents
-- `searchGoogleDocs` - Search documents
-- `getRecentGoogleDocs` - Get recent documents
-- `getDocumentInfo` - Get document metadata
-- `createFolder` - Create folder
-- `listFolderContents` - List folder contents
-- `listAllFolders` - Recursive folder listing
-- `getFolderInfo` - Get folder metadata
-- `moveFile` - Move file/folder
-- `copyFile` - Copy file
-- `renameFile` - Rename file/folder
-- `deleteFile` - Delete file/folder
-- `createDocument` - Create new document
-- `createFromTemplate` - Create from template
+### Google Drive (13 tools)
+- Document discovery: `listGoogleDocs`, `searchGoogleDocs`, `getRecentGoogleDocs`
+- Document info: `getDocumentInfo`
+- Folder management: `createFolder`, `listFolderContents`, `listAllFolders`, `getFolderInfo`
+- File operations: `moveFile`, `copyFile`, `renameFile`, `deleteFile`
+- Document creation: `createDocument`
 
-### Enhanced Formatting (3 tools)
-- `createFormattedDocument` - Create document with structured formatting
-- `insertFormattedContent` - Insert formatted content at index
-- `replaceDocumentContent` - Replace entire document content
+### Google Slides (16 tools)
+- Presentation: `getPresentation`, `listSlides`, `getSlide`, `mapSlide`, `createPresentation`
+- Slides: `addSlide`, `duplicateSlide`, `deleteSlide`, `moveSlide`
+- Elements: `addTextBox`, `addShape`, `addImage`, `addTable`, `deleteElement`
+- Content: `insertTextInElement`, `updateSpeakerNotes`
+
+### Gmail (34 tools)
+| Subcategory | Count | Examples |
+|-------------|-------|----------|
+| Core Email | 7 | `send_email`, `read_email`, `search_emails`, `draft_email` |
+| Labels | 5 | `list_email_labels`, `create_label`, `get_or_create_label` |
+| Batch | 2 | `batch_modify_emails`, `batch_delete_emails` |
+| Filters | 5 | `create_filter`, `list_filters`, `create_filter_from_template` |
+| Threads | 4 | `get_thread`, `list_threads`, `reply_to_email`, `forward_email` |
+| Actions | 5 | `trash_email`, `archive_email`, `mark_as_read` |
+| Drafts | 5 | `list_drafts`, `get_draft`, `update_draft`, `send_draft` |
+| Profile | 1 | `get_user_profile` |
 
 ---
 
@@ -107,15 +92,12 @@ MCP Client (Claude/VS Code)
          │
     MCP Protocol (stdio)
          │
-    FastMCP Server
+    FastMCP Server (92 tools)
          │
-    ┌────┴────┐
-    │         │
-Google APIs   Auth Module
-    │         │
-    └────┬────┘
-         │
-   OAuth2 / Service Account
+    ┌────┴────┬────────┬────────┬────────┐
+    │         │        │        │        │
+  Docs    Sheets   Slides   Drive    Gmail
+  API v1   API v4   API v1   API v3   API v1
 ```
 
 ### Authentication Methods
@@ -129,11 +111,28 @@ Google APIs   Auth Module
 | Layer | Technology |
 |-------|------------|
 | Runtime | Node.js 18+ |
-| Language | TypeScript 5.x |
-| MCP Framework | FastMCP 0.3.x |
+| Language | TypeScript 5.x (ES2022) |
+| MCP Framework | FastMCP 3.24.0 |
 | API Client | googleapis 148.x |
 | Validation | Zod 3.x |
 | Auth | google-auth-library 9.x |
+
+---
+
+## Source Files
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `server.ts` | 5,301 | 92 tool definitions |
+| `googleDocsApiHelpers.ts` | 827 | Docs API helpers |
+| `googleGmailApiHelpers.ts` | 802 | Gmail API helpers |
+| `googleSlidesApiHelpers.ts` | 595 | Slides API helpers |
+| `googleSheetsApiHelpers.ts` | 427 | Sheets API helpers |
+| `types.ts` | 386 | Zod schemas |
+| `gmailFilterManager.ts` | 321 | Filter management |
+| `gmailLabelManager.ts` | 299 | Label management |
+| `auth.ts` | 226 | Authentication |
+| **Total** | **9,180** | |
 
 ---
 
@@ -144,6 +143,7 @@ Google APIs   Auth Module
 3. **editTableCell** - Not implemented (complex cell indexing)
 4. **findElement** - Not implemented
 5. **fixListFormatting** - Experimental, unreliable
+6. **Gmail first use** - Delete existing tokens after adding Gmail scope
 
 ---
 
@@ -153,6 +153,7 @@ Google APIs   Auth Module
 1. Follow [README.md](../README.md) setup instructions
 2. Review [SAMPLE_TASKS.md](../SAMPLE_TASKS.md) for usage examples
 3. See [vscode.md](../vscode.md) for VS Code integration
+4. Reference [CLAUDE.md](../CLAUDE.md) for tool quick reference
 
 ### For Developers
 1. Read [Architecture Overview](architecture.md) for system design
@@ -167,14 +168,14 @@ Google APIs   Auth Module
 mcp-googledocs-server/
 ├── docs/                    # ← YOU ARE HERE
 │   ├── index.md            # This file
-│   ├── architecture.md     # System design
-│   ├── source-tree.md      # Code structure
+│   ├── architecture.md     # System design (92 tools)
+│   ├── source-tree.md      # Code structure (9,180 LOC)
 │   └── developer-guide.md  # Contributing guide
-├── src/                     # TypeScript source
+├── src/                     # TypeScript source (9 files)
 ├── tests/                   # Test files
 ├── README.md               # Main documentation
 ├── SAMPLE_TASKS.md         # Example workflows
-├── CLAUDE.md               # AI instructions
+├── CLAUDE.md               # AI quick reference
 └── vscode.md               # VS Code guide
 ```
 
@@ -186,5 +187,6 @@ mcp-googledocs-server/
 |-------|-------|
 | Generated by | BMAD Document Project Workflow v1.2.0 |
 | Scan Level | Exhaustive |
-| Files Analyzed | All source files |
-| Generation Date | 2026-01-20 |
+| Files Analyzed | All 9 source files |
+| Tools Documented | 92 |
+| Generation Date | 2026-01-22 |
