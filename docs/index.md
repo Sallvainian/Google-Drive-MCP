@@ -140,7 +140,7 @@ MCP Client (Claude/VS Code)
 
 1. **Comment anchoring** - Programmatic comments appear in list but not anchored to text
 2. **Resolved status** - May not persist in Google Docs UI
-3. **editTableCell** - Not implemented (complex cell indexing)
+3. **editTableCell** - Implemented; may have edge cases with complex/merged cell indexing
 4. **findElement** - Not implemented
 5. **fixListFormatting** - Experimental, unreliable
 6. **Gmail first use** - Delete existing tokens after adding Gmail scope
