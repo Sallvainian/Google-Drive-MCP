@@ -117,7 +117,7 @@ The Google Docs MCP Server is a Model Context Protocol (MCP) server that provide
 | Tool | Description |
 |------|-------------|
 | `insertTable` | Create a new table |
-| `editTableCell` | Edit table cell *(NOT IMPLEMENTED)* |
+| `editTableCell` | Edit table cell |
 | `insertPageBreak` | Insert page break |
 | `insertImageFromUrl` | Insert image from URL |
 | `insertLocalImage` | Upload and insert local image |
