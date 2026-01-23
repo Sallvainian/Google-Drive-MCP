@@ -117,7 +117,7 @@ The Google Docs MCP Server is a Model Context Protocol (MCP) server that provide
 | Tool | Description |
 |------|-------------|
 | `insertTable` | Create a new table |
-| `editTableCell` | Edit table cell *(NOT IMPLEMENTED)* |
+| `editTableCell` | Edit table cell |
 | `insertPageBreak` | Insert page break |
 | `insertImageFromUrl` | Insert image from URL |
 | `insertLocalImage` | Upload and insert local image |
@@ -353,7 +353,7 @@ API Error → Check Error Code → Map to UserError → Return Friendly Message
 
 1. **Comment Anchoring**: Programmatically created comments appear in "All Comments" but aren't visibly anchored to text
 2. **Resolved Status**: Comment resolution may not persist in Google Docs UI
-3. **editTableCell**: Not implemented (complex cell index calculation)
+3. **editTableCell**: May have edge cases with merged cells
 4. **findElement**: Not implemented
 5. **fixListFormatting**: Experimental, may not work reliably
 6. **First Gmail use**: After adding Gmail scope, delete existing tokens and re-authenticate
