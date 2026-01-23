@@ -401,6 +401,7 @@ export async function getTableCellRange(
     cellEndIndex: number;
     contentStartIndex: number;
     contentEndIndex: number;
+    paragraphEndIndex: number;  // Includes trailing newline for paragraph styling
 } | null> {
     try {
         // Fetch document structure with table details
@@ -471,6 +472,10 @@ export async function getTableCellRange(
             }
         }
 
+        // Store paragraphEndIndex BEFORE subtracting (includes trailing newline for paragraph styling)
+        // Google Docs paragraph styles CAN be applied to empty paragraphs if the range includes the newline
+        const paragraphEndIndex = contentEndIndex;
+
         // The content end typically includes a trailing newline - preserve it by stopping one char before
         // If contentEndIndex > contentStartIndex, the actual editable content is contentStart to contentEnd - 1
         // But we need to handle the case where the cell only contains a newline
@@ -478,13 +483,14 @@ export async function getTableCellRange(
             contentEndIndex = contentEndIndex - 1; // Exclude trailing newline
         }
 
-        console.log(`Found cell (${rowIndex}, ${columnIndex}): cell=${cellStartIndex}-${cellEndIndex}, content=${contentStartIndex}-${contentEndIndex}`);
+        console.log(`Found cell (${rowIndex}, ${columnIndex}): cell=${cellStartIndex}-${cellEndIndex}, content=${contentStartIndex}-${contentEndIndex}, paragraphEnd=${paragraphEndIndex}`);
 
         return {
             cellStartIndex,
             cellEndIndex,
             contentStartIndex,
-            contentEndIndex
+            contentEndIndex,
+            paragraphEndIndex
         };
 
     } catch (error: any) {

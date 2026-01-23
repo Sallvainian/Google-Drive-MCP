@@ -981,9 +981,15 @@ execute: async (args, { log }) => {
             }
 
             // Step 4: Apply paragraph style
-            if (args.paragraphStyle && newTextEndIndex > cellRange.contentStartIndex) {
+            // Use paragraphEndIndex to include the trailing newline, enabling styles on empty cells
+            if (args.paragraphStyle) {
+                // Determine the paragraph range end
+                const paraEndIndex = args.textContent !== undefined
+                    ? cellRange.contentStartIndex + (args.textContent.length > 0 ? args.textContent.length + 1 : 1)
+                    : cellRange.paragraphEndIndex;
+
                 const paraReq = GDocsHelpers.buildUpdateParagraphStyleRequest(
-                    cellRange.contentStartIndex, newTextEndIndex, args.paragraphStyle
+                    cellRange.contentStartIndex, paraEndIndex, args.paragraphStyle
                 );
                 if (paraReq) requests.push(paraReq.request);
             }
