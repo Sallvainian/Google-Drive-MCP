@@ -67,8 +67,16 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     const { client_secret, client_id, redirect_uris } = await loadClientSecrets();
     const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
     client.setCredentials(credentials);
+
+    // Try to refresh token immediately to verify it works
+    try {
+      await client.refreshAccessToken();
+    } catch (refreshErr: any) {
+      throw refreshErr;
+    }
+
     return client;
-  } catch (err) {
+  } catch (err: any) {
     return null;
   }
 }
@@ -105,8 +113,6 @@ async function authenticate(): Promise<OAuth2Client> {
   // For web clients, use the configured redirect URI
   const PORT = 3000;
   const redirectUri = client_type === 'web' ? redirect_uris[0] : `http://localhost:${PORT}`;
-  console.error(`DEBUG: Using redirect URI: ${redirectUri}`);
-  console.error(`DEBUG: Client type: ${client_type}`);
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
 
   const authorizeUrl = oAuth2Client.generateAuthUrl({
