@@ -1,6 +1,6 @@
 # Google Docs MCP Server
 
-FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
+FastMCP server with 93 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 
 ## Tool Categories
 
@@ -12,7 +12,7 @@ FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 | Comments | 6 | `listComments`, `getComment`, `addComment`, `replyToComment`, `resolveComment`, `deleteComment` |
 | Sheets | 8 | `readSpreadsheet`, `writeSpreadsheet`, `appendSpreadsheetRows`, `clearSpreadsheetRange`, `createSpreadsheet`, `listGoogleSheets` |
 | Drive | 13 | `listGoogleDocs`, `searchGoogleDocs`, `getDocumentInfo`, `createFolder`, `moveFile`, `copyFile`, `createDocument` |
-| Slides | 16 | `getPresentation`, `listSlides`, `getSlide`, `mapSlide`, `createPresentation`, `addSlide`, `duplicateSlide`, `addTextBox`, `addShape`, `addImage`, `addTable`, `deleteSlide`, `deleteElement`, `updateSpeakerNotes`, `moveSlide`, `insertTextInElement` |
+| Slides | 17 | `getPresentation`, `listSlides`, `getSlide`, `mapSlide`, `createPresentation`, `addSlide`, `duplicateSlide`, `addTextBox`, `addShape`, `addImage`, `addTable`, `editSlideTableCell`, `deleteSlide`, `deleteElement`, `updateSpeakerNotes`, `moveSlide`, `insertTextInElement` |
 | Gmail | 34 | `send_email`, `read_email`, `search_emails`, `draft_email`, `reply_to_email`, `forward_email`, `get_thread`, `list_threads`, `trash_email`, `archive_email`, `mark_as_read`, `list_email_labels`, `create_label`, `create_filter`, `batch_modify_emails` |
 
 *Not fully implemented

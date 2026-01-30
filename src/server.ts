@@ -1556,7 +1556,8 @@ try {
   // Build the query string for Google Drive API
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
-    queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+    // Use name-only search to allow sorting - fullText search doesn't support orderBy
+    queryString += ` and name contains '${args.query}'`;
   }
 
   const response = await drive.files.list({
@@ -1586,7 +1587,14 @@ try {
   return result;
 } catch (error: any) {
   log.error(`Error listing Google Docs: ${error.message || error}`);
-  if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  if (error.code === 403) {
+    // Check if it's an API limitation vs permission error
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('sorting') || msg.includes('fulltext')) {
+      throw new UserError("Google Drive API doesn't support sorting with full-text search. Try searching by name only.");
+    }
+    throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  }
   throw new UserError(`Failed to list documents: ${error.message || 'Unknown error'}`);
 }
 }
@@ -1622,10 +1630,13 @@ try {
     queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
   }
 
+  // fullText search doesn't support orderBy - only apply sorting for name-only search
+  const usesFullText = args.searchIn === 'content' || args.searchIn === 'both';
+
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
-    orderBy: 'modifiedTime desc',
+    ...(usesFullText ? {} : { orderBy: 'modifiedTime desc' }),
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
   });
 
@@ -1649,7 +1660,14 @@ try {
   return result;
 } catch (error: any) {
   log.error(`Error searching Google Docs: ${error.message || error}`);
-  if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  if (error.code === 403) {
+    // Check if it's an API limitation vs permission error
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('sorting') || msg.includes('fulltext')) {
+      throw new UserError("Google Drive API doesn't support sorting with full-text search. Results will be returned without specific ordering.");
+    }
+    throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  }
   throw new UserError(`Failed to search documents: ${error.message || 'Unknown error'}`);
 }
 }
@@ -2646,8 +2664,10 @@ execute: async (args, { log }) => {
   try {
     // Build the query string for Google Drive API
     let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
+    let usesFullText = false;
     if (args.query) {
-      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+      // Use name-only search to allow sorting, fullText search doesn't support orderBy
+      queryString += ` and name contains '${args.query}'`;
     }
 
     const response = await drive.files.list({
@@ -2677,7 +2697,14 @@ execute: async (args, { log }) => {
     return result;
   } catch (error: any) {
     log.error(`Error listing Google Sheets: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    if (error.code === 403) {
+      // Check if this is an actual permission error or an API limitation
+      const errorReason = error.response?.data?.error?.errors?.[0]?.reason;
+      if (errorReason === 'forbidden' && error.message?.includes('Sorting')) {
+        throw new UserError(`API limitation: ${error.message}`);
+      }
+      throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    }
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
   }
 }
@@ -3387,6 +3414,9 @@ server.addTool({
         if (el.table) {
           element.rows = el.table.rows;
           element.columns = el.table.columns;
+          element.tableContent = el.table.tableRows?.map((row: any) =>
+            row.tableCells?.map((cell: any) => extractText(cell) || '') ?? []
+          ) ?? [];
         }
 
         // Include size/position if available
@@ -3517,7 +3547,21 @@ server.addTool({
               .trim() || null;
           }
         } else if (el.image) type = 'image';
-        else if (el.table) type = 'table';
+        else if (el.table) {
+          type = 'table';
+          const cellTexts: string[] = [];
+          for (const row of el.table.tableRows || []) {
+            for (const cell of row.tableCells || []) {
+              const cellText = cell.text?.textElements
+                ?.filter((te: any) => te.textRun?.content)
+                .map((te: any) => te.textRun?.content)
+                .join('')
+                .trim();
+              if (cellText) cellTexts.push(cellText);
+            }
+          }
+          text = cellTexts.join(' | ') || null;
+        }
         else if (el.line) type = 'line';
         else if (el.video) type = 'video';
 
@@ -3938,6 +3982,115 @@ server.addTool({
       log.error(`Error adding table: ${error.message}`);
       if (error instanceof UserError) throw error;
       throw new UserError(`Failed to add table: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'editSlideTableCell',
+  description: 'Edits the text content and optional styling of a specific cell in a Slides table. Replaces all existing cell text with the new text.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    tableObjectId: z.string().describe('The object ID of the table element (from getSlide or addTable).'),
+    rowIndex: z.number().int().min(0).describe('0-based row index of the cell to edit.'),
+    columnIndex: z.number().int().min(0).describe('0-based column index of the cell to edit.'),
+    text: z.string().describe('The new text content for the cell.'),
+    fontSize: z.number().positive().optional().describe('Font size in points (e.g., 12, 14, 18).'),
+    fontFamily: z.string().optional().describe('Font family name (e.g., "Arial", "Times New Roman", "Roboto").'),
+    bold: z.boolean().optional().describe('Whether the text should be bold.'),
+    italic: z.boolean().optional().describe('Whether the text should be italic.'),
+    textColor: z.string().regex(/^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/).optional().describe('Text color in hex format (e.g., "#000000" for black, "#FF0000" for red).'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Editing table cell [${args.rowIndex}, ${args.columnIndex}] in table ${args.tableObjectId}`);
+
+    try {
+      const cellLocation = { rowIndex: args.rowIndex, columnIndex: args.columnIndex };
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // Delete existing cell text
+      requests.push({
+        deleteText: {
+          objectId: args.tableObjectId,
+          cellLocation,
+          textRange: { type: 'ALL' },
+        },
+      });
+
+      // Insert new text if non-empty
+      if (args.text.length > 0) {
+        requests.push({
+          insertText: {
+            objectId: args.tableObjectId,
+            cellLocation,
+            text: args.text,
+            insertionIndex: 0,
+          },
+        });
+      }
+
+      // Apply text styling if any style options are provided
+      const hasStyleOptions = args.fontSize !== undefined ||
+                              args.fontFamily !== undefined ||
+                              args.bold !== undefined ||
+                              args.italic !== undefined ||
+                              args.textColor !== undefined;
+
+      if (hasStyleOptions && args.text.length > 0) {
+        const style: slides_v1.Schema$TextStyle = {};
+        const fields: string[] = [];
+
+        if (args.fontSize !== undefined) {
+          style.fontSize = { magnitude: args.fontSize, unit: 'PT' };
+          fields.push('fontSize');
+        }
+        if (args.fontFamily) {
+          style.fontFamily = args.fontFamily;
+          fields.push('fontFamily');
+        }
+        if (args.bold !== undefined) {
+          style.bold = args.bold;
+          fields.push('bold');
+        }
+        if (args.italic !== undefined) {
+          style.italic = args.italic;
+          fields.push('italic');
+        }
+        if (args.textColor) {
+          const rgbColor = SlidesHelpers.hexToRgbColor(args.textColor);
+          if (rgbColor) {
+            style.foregroundColor = { opaqueColor: { rgbColor } };
+            fields.push('foregroundColor');
+          }
+        }
+
+        if (fields.length > 0) {
+          requests.push({
+            updateTextStyle: {
+              objectId: args.tableObjectId,
+              cellLocation,
+              style,
+              textRange: { type: 'ALL' },
+              fields: fields.join(','),
+            },
+          });
+        }
+      }
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        tableObjectId: args.tableObjectId,
+        cell: { rowIndex: args.rowIndex, columnIndex: args.columnIndex },
+        textLength: args.text.length,
+        styled: hasStyleOptions,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error editing table cell: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to edit table cell: ${error.message}`);
     }
   }
 });
