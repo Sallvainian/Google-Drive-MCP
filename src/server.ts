@@ -2244,6 +2244,82 @@ try {
 }
 });
 
+server.addTool({
+name: 'uploadFile',
+description: 'Uploads a local file (PDF, DOCX, images, etc.) to a Google Drive folder. Returns the file ID and web view link.',
+parameters: z.object({
+  localFilePath: z.string().describe('Absolute path to the local file to upload.'),
+  parentFolderId: z.string().optional().describe('ID of the Drive folder to upload into. If not provided, uploads to Drive root.'),
+  fileName: z.string().optional().describe('Optional custom name for the file in Drive. If not provided, uses the local file name.'),
+}),
+execute: async (args, { log }) => {
+const drive = await getDriveClient();
+const fs = await import('fs');
+const path = await import('path');
+
+log.info(`Uploading local file ${args.localFilePath} to Drive`);
+
+if (!fs.existsSync(args.localFilePath)) {
+  throw new UserError(`File not found: ${args.localFilePath}`);
+}
+
+const fileName = args.fileName || path.basename(args.localFilePath);
+const ext = path.extname(args.localFilePath).toLowerCase();
+
+const mimeTypeMap: { [key: string]: string } = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.zip': 'application/zip',
+  '.mp4': 'video/mp4',
+  '.mp3': 'audio/mpeg',
+};
+
+const mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+
+try {
+  const fileMetadata: drive_v3.Schema$File = {
+    name: fileName,
+  };
+
+  if (args.parentFolderId) {
+    fileMetadata.parents = [args.parentFolderId];
+  }
+
+  const media = {
+    mimeType: mimeType,
+    body: fs.createReadStream(args.localFilePath),
+  };
+
+  const response = await drive.files.create({
+    requestBody: fileMetadata,
+    media: media,
+    fields: 'id,name,webViewLink,size',
+  });
+
+  const file = response.data;
+  return `Successfully uploaded "${file.name}" (ID: ${file.id})\nLink: ${file.webViewLink}\nSize: ${file.size} bytes`;
+} catch (error: any) {
+  log.error(`Error uploading file: ${error.message || error}`);
+  if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
+  if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
+  throw new UserError(`Failed to upload file: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
 // --- Document Creation Tools ---
 
 server.addTool({
