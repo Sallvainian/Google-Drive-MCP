@@ -683,6 +683,63 @@ throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`
 });
 
 server.addTool({
+name: 'insertHyperlink',
+description: 'Inserts new hyperlinked text at a specific index, or converts existing text in the document into a clickable hyperlink. Use mode "insert" to add new linked text, or mode "find" to make existing text a link.',
+parameters: DocumentIdParameter.extend({
+url: z.string().url().describe('The URL the hyperlink should point to.'),
+mode: z.enum(['insert', 'find']).describe('"insert" to add new linked text at an index, "find" to convert existing text into a hyperlink.'),
+text: z.string().min(1).describe('For "insert" mode: the display text to insert. For "find" mode: the exact text in the document to convert into a hyperlink.'),
+index: z.number().int().min(1).optional().describe('(insert mode only) The 1-based index where the hyperlinked text should be inserted.'),
+matchInstance: z.number().int().min(1).optional().default(1).describe('(find mode only) Which occurrence of the text to target (1 = first, 2 = second, etc.).'),
+}),
+execute: async (args, { log }) => {
+const docs = await getDocsClient();
+log.info(`insertHyperlink: mode=${args.mode}, text="${args.text}", url="${args.url}"`);
+
+try {
+    if (args.mode === 'insert') {
+        if (args.index === undefined) {
+            throw new UserError('index is required when mode is "insert".');
+        }
+        // Step 1: Insert the text
+        await GDocsHelpers.insertText(docs, args.documentId, args.text, args.index);
+        // Step 2: Apply link style to the inserted text range
+        const startIndex = args.index;
+        const endIndex = args.index + args.text.length;
+        const request: docs_v1.Schema$Request = {
+            updateTextStyle: {
+                range: { startIndex, endIndex },
+                textStyle: { link: { url: args.url } },
+                fields: 'link'
+            }
+        };
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        return `Inserted hyperlinked text "${args.text}" at index ${args.index}, linking to ${args.url}.`;
+    } else {
+        // find mode: locate existing text and apply link
+        const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.text, args.matchInstance);
+        if (!range) {
+            throw new UserError(`Could not find instance ${args.matchInstance} of text "${args.text}" in the document.`);
+        }
+        const request: docs_v1.Schema$Request = {
+            updateTextStyle: {
+                range: { startIndex: range.startIndex, endIndex: range.endIndex },
+                textStyle: { link: { url: args.url } },
+                fields: 'link'
+            }
+        };
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        return `Converted text "${args.text}" (instance ${args.matchInstance}) into a hyperlink pointing to ${args.url} (range ${range.startIndex}-${range.endIndex}).`;
+    }
+} catch (error: any) {
+    log.error(`Error in insertHyperlink: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert hyperlink: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
+server.addTool({
 name: 'deleteRange',
 description: 'Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.',
 parameters: DocumentIdParameter.extend({
