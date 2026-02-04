@@ -169,6 +169,14 @@ return gmail;
 // === HELPER FUNCTIONS ===
 
 /**
+ * Escapes a string for safe use inside single-quoted Drive API query values.
+ * Backslashes and single quotes must be escaped with a preceding backslash.
+ */
+function escapeDriveQuery(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
  * Converts Google Docs JSON structure to Markdown format
  */
 function convertDocsJsonToMarkdown(docData: any): string {
@@ -1602,7 +1610,7 @@ name: 'listGoogleDocs',
 description: 'Lists Google Documents from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter documents by name or content.'),
+  query: z.string().optional().describe('Search query to filter documents by name.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -1613,8 +1621,7 @@ try {
   // Build the query string for Google Drive API
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
-    // Use name-only search to allow sorting - fullText search doesn't support orderBy
-    queryString += ` and name contains '${args.query}'`;
+    queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
   }
 
   const response = await drive.files.list({
@@ -1645,11 +1652,6 @@ try {
 } catch (error: any) {
   log.error(`Error listing Google Docs: ${error.message || error}`);
   if (error.code === 403) {
-    // Check if it's an API limitation vs permission error
-    const msg = error.message?.toLowerCase() || '';
-    if (msg.includes('sorting') || msg.includes('fulltext')) {
-      throw new UserError("Google Drive API doesn't support sorting with full-text search. Try searching by name only.");
-    }
     throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
   }
   throw new UserError(`Failed to list documents: ${error.message || 'Unknown error'}`);
@@ -1675,16 +1677,17 @@ try {
 
   // Add search criteria
   if (args.searchIn === 'name') {
-    queryString += ` and name contains '${args.searchQuery}'`;
+    queryString += ` and name contains '${escapeDriveQuery(args.searchQuery)}'`;
   } else if (args.searchIn === 'content') {
-    queryString += ` and fullText contains '${args.searchQuery}'`;
+    queryString += ` and fullText contains '${escapeDriveQuery(args.searchQuery)}'`;
   } else {
-    queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
+    const escaped = escapeDriveQuery(args.searchQuery);
+    queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
   }
 
   // Add date filter if provided
   if (args.modifiedAfter) {
-    queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
+    queryString += ` and modifiedTime > '${escapeDriveQuery(args.modifiedAfter)}'`;
   }
 
   // fullText search doesn't support orderBy - only apply sorting for name-only search
@@ -2787,7 +2790,7 @@ name: 'listGoogleSheets',
 description: 'Lists Google Spreadsheets from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
+  query: z.string().optional().describe('Search query to filter spreadsheets by name.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -2797,10 +2800,8 @@ execute: async (args, { log }) => {
   try {
     // Build the query string for Google Drive API
     let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
-    let usesFullText = false;
     if (args.query) {
-      // Use name-only search to allow sorting, fullText search doesn't support orderBy
-      queryString += ` and name contains '${args.query}'`;
+      queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
     }
 
     const response = await drive.files.list({
@@ -2831,11 +2832,6 @@ execute: async (args, { log }) => {
   } catch (error: any) {
     log.error(`Error listing Google Sheets: ${error.message || error}`);
     if (error.code === 403) {
-      // Check if this is an actual permission error or an API limitation
-      const errorReason = error.response?.data?.error?.errors?.[0]?.reason;
-      if (errorReason === 'forbidden' && error.message?.includes('Sorting')) {
-        throw new UserError(`API limitation: ${error.message}`);
-      }
       throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
     }
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
@@ -4218,7 +4214,7 @@ server.addTool({
         tableObjectId: args.tableObjectId,
         cell: { rowIndex: args.rowIndex, columnIndex: args.columnIndex },
         textLength: args.text.length,
-        styled: hasStyleOptions,
+        styled: hasStyleOptions && args.text.length > 0,
       }, null, 2);
     } catch (error: any) {
       log.error(`Error editing table cell: ${error.message}`);

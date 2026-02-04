@@ -61,23 +61,35 @@ async function authorizeWithServiceAccount(): Promise<JWT> {
 // --- END OF NEW FUNCTION---
 
 async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
+  let content: Buffer;
   try {
-    const content = await fs.readFile(TOKEN_PATH);
+    content = await fs.readFile(TOKEN_PATH);
+  } catch {
+    return null;
+  }
+
+  try {
     const credentials = JSON.parse(content.toString());
     const { client_secret, client_id, redirect_uris } = await loadClientSecrets();
     const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
     client.setCredentials(credentials);
 
-    // Try to refresh token immediately to verify it works
-    try {
-      await client.refreshAccessToken();
-    } catch (refreshErr: any) {
-      throw refreshErr;
-    }
+    // Verify token is still valid
+    await client.refreshAccessToken();
 
     return client;
   } catch (err: any) {
-    return null;
+    const msg = (err.message || '').toLowerCase();
+    if (
+      msg.includes('invalid_grant') ||
+      msg.includes('invalid_client') ||
+      msg.includes('token has been expired') ||
+      msg.includes('token has been revoked')
+    ) {
+      console.error('Saved credentials are invalid, will re-authenticate:', err.message);
+      return null;
+    }
+    throw new Error(`Failed to verify saved credentials: ${err.message}`);
   }
 }
 
