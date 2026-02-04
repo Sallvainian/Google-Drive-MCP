@@ -1,18 +1,18 @@
 # Google Docs MCP Server
 
-FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
+FastMCP server with 99 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 
 ## Tool Categories
 
 | Category | Count | Examples |
 |----------|-------|----------|
-| Docs | 5 | `readGoogleDoc`, `appendToGoogleDoc`, `insertText`, `deleteRange`, `listDocumentTabs` |
+| Docs | 6 | `readGoogleDoc`, `appendToGoogleDoc`, `insertText`, `insertHyperlink`, `deleteRange`, `listDocumentTabs` |
 | Formatting | 3 | `applyTextStyle`, `applyParagraphStyle`, `formatMatchingText` |
 | Structure | 7 | `insertTable`, `insertPageBreak`, `insertImageFromUrl`, `insertLocalImage`, `editTableCell`, `findElement`*, `fixListFormatting`* |
 | Comments | 6 | `listComments`, `getComment`, `addComment`, `replyToComment`, `resolveComment`, `deleteComment` |
 | Sheets | 8 | `readSpreadsheet`, `writeSpreadsheet`, `appendSpreadsheetRows`, `clearSpreadsheetRange`, `createSpreadsheet`, `listGoogleSheets` |
-| Drive | 13 | `listGoogleDocs`, `searchGoogleDocs`, `getDocumentInfo`, `createFolder`, `moveFile`, `copyFile`, `createDocument` |
-| Slides | 16 | `getPresentation`, `listSlides`, `getSlide`, `mapSlide`, `createPresentation`, `addSlide`, `duplicateSlide`, `addTextBox`, `addShape`, `addImage`, `addTable`, `deleteSlide`, `deleteElement`, `updateSpeakerNotes`, `moveSlide`, `insertTextInElement` |
+| Drive | 15 | `listGoogleDocs`, `searchGoogleDocs`, `getRecentGoogleDocs`, `getDocumentInfo`, `createFolder`, `moveFile`, `copyFile`, `uploadFile`, `createDocument`, `createFromTemplate` |
+| Slides | 17 | `getPresentation`, `listSlides`, `getSlide`, `mapSlide`, `createPresentation`, `addSlide`, `duplicateSlide`, `addTextBox`, `addShape`, `addImage`, `addTable`, `editSlideTableCell`, `deleteSlide`, `deleteElement`, `updateSpeakerNotes`, `moveSlide`, `insertTextInElement` |
 | Gmail | 34 | `send_email`, `read_email`, `search_emails`, `draft_email`, `reply_to_email`, `forward_email`, `get_thread`, `list_threads`, `trash_email`, `archive_email`, `mark_as_read`, `list_email_labels`, `create_label`, `create_filter`, `batch_modify_emails` |
 
 *Not fully implemented
@@ -114,7 +114,7 @@ FastMCP server with 92 tools for Google Docs, Sheets, Slides, Drive, and Gmail.
 | `src/googleGmailApiHelpers.ts` | Email creation, MIME handling, message formatting, batch operations |
 | `src/gmailLabelManager.ts` | Label CRUD operations, system labels |
 | `src/gmailFilterManager.ts` | Filter CRUD, template-based filter creation |
-| `src/server.ts` | All 92 tool definitions with full parameter schemas |
+| `src/server.ts` | All 99 tool definitions with full parameter schemas |
 
 ## See Also
 

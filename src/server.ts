@@ -169,6 +169,14 @@ return gmail;
 // === HELPER FUNCTIONS ===
 
 /**
+ * Escapes a string for safe use inside single-quoted Drive API query values.
+ * Backslashes and single quotes must be escaped with a preceding backslash.
+ */
+function escapeDriveQuery(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+/**
  * Converts Google Docs JSON structure to Markdown format
  */
 function convertDocsJsonToMarkdown(docData: any): string {
@@ -678,6 +686,63 @@ try {
 log.error(`Error inserting text in doc ${args.documentId}: ${error.message || error}`);
 if (error instanceof UserError) throw error;
 throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
+server.addTool({
+name: 'insertHyperlink',
+description: 'Inserts new hyperlinked text at a specific index, or converts existing text in the document into a clickable hyperlink. Use mode "insert" to add new linked text, or mode "find" to make existing text a link.',
+parameters: DocumentIdParameter.extend({
+url: z.string().url().describe('The URL the hyperlink should point to.'),
+mode: z.enum(['insert', 'find']).describe('"insert" to add new linked text at an index, "find" to convert existing text into a hyperlink.'),
+text: z.string().min(1).describe('For "insert" mode: the display text to insert. For "find" mode: the exact text in the document to convert into a hyperlink.'),
+index: z.number().int().min(1).optional().describe('(insert mode only) The 1-based index where the hyperlinked text should be inserted.'),
+matchInstance: z.number().int().min(1).optional().default(1).describe('(find mode only) Which occurrence of the text to target (1 = first, 2 = second, etc.).'),
+}),
+execute: async (args, { log }) => {
+const docs = await getDocsClient();
+log.info(`insertHyperlink: mode=${args.mode}, text="${args.text}", url="${args.url}"`);
+
+try {
+    if (args.mode === 'insert') {
+        if (args.index === undefined) {
+            throw new UserError('index is required when mode is "insert".');
+        }
+        // Step 1: Insert the text
+        await GDocsHelpers.insertText(docs, args.documentId, args.text, args.index);
+        // Step 2: Apply link style to the inserted text range
+        const startIndex = args.index;
+        const endIndex = args.index + args.text.length;
+        const request: docs_v1.Schema$Request = {
+            updateTextStyle: {
+                range: { startIndex, endIndex },
+                textStyle: { link: { url: args.url } },
+                fields: 'link'
+            }
+        };
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        return `Inserted hyperlinked text "${args.text}" at index ${args.index}, linking to ${args.url}.`;
+    } else {
+        // find mode: locate existing text and apply link
+        const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.text, args.matchInstance);
+        if (!range) {
+            throw new UserError(`Could not find instance ${args.matchInstance} of text "${args.text}" in the document.`);
+        }
+        const request: docs_v1.Schema$Request = {
+            updateTextStyle: {
+                range: { startIndex: range.startIndex, endIndex: range.endIndex },
+                textStyle: { link: { url: args.url } },
+                fields: 'link'
+            }
+        };
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+        return `Converted text "${args.text}" (instance ${args.matchInstance}) into a hyperlink pointing to ${args.url} (range ${range.startIndex}-${range.endIndex}).`;
+    }
+} catch (error: any) {
+    log.error(`Error in insertHyperlink: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert hyperlink: ${error.message || 'Unknown error'}`);
 }
 }
 });
@@ -1551,7 +1616,7 @@ name: 'listGoogleDocs',
 description: 'Lists Google Documents from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter documents by name or content.'),
+  query: z.string().optional().describe('Search query to filter documents by name.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -1562,7 +1627,7 @@ try {
   // Build the query string for Google Drive API
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
-    queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+    queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
   }
 
   const response = await drive.files.list({
@@ -1592,7 +1657,9 @@ try {
   return result;
 } catch (error: any) {
   log.error(`Error listing Google Docs: ${error.message || error}`);
-  if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  if (error.code === 403) {
+    throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  }
   throw new UserError(`Failed to list documents: ${error.message || 'Unknown error'}`);
 }
 }
@@ -1616,22 +1683,26 @@ try {
 
   // Add search criteria
   if (args.searchIn === 'name') {
-    queryString += ` and name contains '${args.searchQuery}'`;
+    queryString += ` and name contains '${escapeDriveQuery(args.searchQuery)}'`;
   } else if (args.searchIn === 'content') {
-    queryString += ` and fullText contains '${args.searchQuery}'`;
+    queryString += ` and fullText contains '${escapeDriveQuery(args.searchQuery)}'`;
   } else {
-    queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
+    const escaped = escapeDriveQuery(args.searchQuery);
+    queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
   }
 
   // Add date filter if provided
   if (args.modifiedAfter) {
-    queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
+    queryString += ` and modifiedTime > '${escapeDriveQuery(args.modifiedAfter)}'`;
   }
+
+  // fullText search doesn't support orderBy - only apply sorting for name-only search
+  const usesFullText = args.searchIn === 'content' || args.searchIn === 'both';
 
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
-    orderBy: 'modifiedTime desc',
+    ...(usesFullText ? {} : { orderBy: 'modifiedTime desc' }),
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
   });
 
@@ -1655,7 +1726,14 @@ try {
   return result;
 } catch (error: any) {
   log.error(`Error searching Google Docs: ${error.message || error}`);
-  if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  if (error.code === 403) {
+    // Check if it's an API limitation vs permission error
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('sorting') || msg.includes('fulltext')) {
+      throw new UserError("Google Drive API doesn't support sorting with full-text search. Results will be returned without specific ordering.");
+    }
+    throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+  }
   throw new UserError(`Failed to search documents: ${error.message || 'Unknown error'}`);
 }
 }
@@ -2232,6 +2310,82 @@ try {
 }
 });
 
+server.addTool({
+name: 'uploadFile',
+description: 'Uploads a local file (PDF, DOCX, images, etc.) to a Google Drive folder. Returns the file ID and web view link.',
+parameters: z.object({
+  localFilePath: z.string().describe('Absolute path to the local file to upload.'),
+  parentFolderId: z.string().optional().describe('ID of the Drive folder to upload into. If not provided, uploads to Drive root.'),
+  fileName: z.string().optional().describe('Optional custom name for the file in Drive. If not provided, uses the local file name.'),
+}),
+execute: async (args, { log }) => {
+const drive = await getDriveClient();
+const fs = await import('fs');
+const path = await import('path');
+
+log.info(`Uploading local file ${args.localFilePath} to Drive`);
+
+if (!fs.existsSync(args.localFilePath)) {
+  throw new UserError(`File not found: ${args.localFilePath}`);
+}
+
+const fileName = args.fileName || path.basename(args.localFilePath);
+const ext = path.extname(args.localFilePath).toLowerCase();
+
+const mimeTypeMap: { [key: string]: string } = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.txt': 'text/plain',
+  '.csv': 'text/csv',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.webp': 'image/webp',
+  '.zip': 'application/zip',
+  '.mp4': 'video/mp4',
+  '.mp3': 'audio/mpeg',
+};
+
+const mimeType = mimeTypeMap[ext] || 'application/octet-stream';
+
+try {
+  const fileMetadata: drive_v3.Schema$File = {
+    name: fileName,
+  };
+
+  if (args.parentFolderId) {
+    fileMetadata.parents = [args.parentFolderId];
+  }
+
+  const media = {
+    mimeType: mimeType,
+    body: fs.createReadStream(args.localFilePath),
+  };
+
+  const response = await drive.files.create({
+    requestBody: fileMetadata,
+    media: media,
+    fields: 'id,name,webViewLink,size',
+  });
+
+  const file = response.data;
+  return `Successfully uploaded "${file.name}" (ID: ${file.id})\nLink: ${file.webViewLink}\nSize: ${file.size} bytes`;
+} catch (error: any) {
+  log.error(`Error uploading file: ${error.message || error}`);
+  if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
+  if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
+  throw new UserError(`Failed to upload file: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
 // --- Document Creation Tools ---
 
 server.addTool({
@@ -2642,7 +2796,7 @@ name: 'listGoogleSheets',
 description: 'Lists Google Spreadsheets from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
+  query: z.string().optional().describe('Search query to filter spreadsheets by name.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -2653,7 +2807,7 @@ execute: async (args, { log }) => {
     // Build the query string for Google Drive API
     let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
     if (args.query) {
-      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+      queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
     }
 
     const response = await drive.files.list({
@@ -2683,7 +2837,9 @@ execute: async (args, { log }) => {
     return result;
   } catch (error: any) {
     log.error(`Error listing Google Sheets: ${error.message || error}`);
-    if (error.code === 403) throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    if (error.code === 403) {
+      throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+    }
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
   }
 }
@@ -3393,6 +3549,9 @@ server.addTool({
         if (el.table) {
           element.rows = el.table.rows;
           element.columns = el.table.columns;
+          element.tableContent = el.table.tableRows?.map((row: any) =>
+            row.tableCells?.map((cell: any) => extractText(cell) || '') ?? []
+          ) ?? [];
         }
 
         // Include size/position if available
@@ -3523,7 +3682,21 @@ server.addTool({
               .trim() || null;
           }
         } else if (el.image) type = 'image';
-        else if (el.table) type = 'table';
+        else if (el.table) {
+          type = 'table';
+          const cellTexts: string[] = [];
+          for (const row of el.table.tableRows || []) {
+            for (const cell of row.tableCells || []) {
+              const cellText = cell.text?.textElements
+                ?.filter((te: any) => te.textRun?.content)
+                .map((te: any) => te.textRun?.content)
+                .join('')
+                .trim();
+              if (cellText) cellTexts.push(cellText);
+            }
+          }
+          text = cellTexts.join(' | ') || null;
+        }
         else if (el.line) type = 'line';
         else if (el.video) type = 'video';
 
@@ -3944,6 +4117,115 @@ server.addTool({
       log.error(`Error adding table: ${error.message}`);
       if (error instanceof UserError) throw error;
       throw new UserError(`Failed to add table: ${error.message}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'editSlideTableCell',
+  description: 'Edits the text content and optional styling of a specific cell in a Slides table. Replaces all existing cell text with the new text.',
+  parameters: z.object({
+    presentationId: z.string().describe('The ID of the presentation.'),
+    tableObjectId: z.string().describe('The object ID of the table element (from getSlide or addTable).'),
+    rowIndex: z.number().int().min(0).describe('0-based row index of the cell to edit.'),
+    columnIndex: z.number().int().min(0).describe('0-based column index of the cell to edit.'),
+    text: z.string().describe('The new text content for the cell.'),
+    fontSize: z.number().positive().optional().describe('Font size in points (e.g., 12, 14, 18).'),
+    fontFamily: z.string().optional().describe('Font family name (e.g., "Arial", "Times New Roman", "Roboto").'),
+    bold: z.boolean().optional().describe('Whether the text should be bold.'),
+    italic: z.boolean().optional().describe('Whether the text should be italic.'),
+    textColor: z.string().regex(/^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/).optional().describe('Text color in hex format (e.g., "#000000" for black, "#FF0000" for red).'),
+  }),
+  execute: async (args, { log }) => {
+    const slides = await getSlidesClient();
+    log.info(`Editing table cell [${args.rowIndex}, ${args.columnIndex}] in table ${args.tableObjectId}`);
+
+    try {
+      const cellLocation = { rowIndex: args.rowIndex, columnIndex: args.columnIndex };
+      const requests: slides_v1.Schema$Request[] = [];
+
+      // Delete existing cell text
+      requests.push({
+        deleteText: {
+          objectId: args.tableObjectId,
+          cellLocation,
+          textRange: { type: 'ALL' },
+        },
+      });
+
+      // Insert new text if non-empty
+      if (args.text.length > 0) {
+        requests.push({
+          insertText: {
+            objectId: args.tableObjectId,
+            cellLocation,
+            text: args.text,
+            insertionIndex: 0,
+          },
+        });
+      }
+
+      // Apply text styling if any style options are provided
+      const hasStyleOptions = args.fontSize !== undefined ||
+                              args.fontFamily !== undefined ||
+                              args.bold !== undefined ||
+                              args.italic !== undefined ||
+                              args.textColor !== undefined;
+
+      if (hasStyleOptions && args.text.length > 0) {
+        const style: slides_v1.Schema$TextStyle = {};
+        const fields: string[] = [];
+
+        if (args.fontSize !== undefined) {
+          style.fontSize = { magnitude: args.fontSize, unit: 'PT' };
+          fields.push('fontSize');
+        }
+        if (args.fontFamily) {
+          style.fontFamily = args.fontFamily;
+          fields.push('fontFamily');
+        }
+        if (args.bold !== undefined) {
+          style.bold = args.bold;
+          fields.push('bold');
+        }
+        if (args.italic !== undefined) {
+          style.italic = args.italic;
+          fields.push('italic');
+        }
+        if (args.textColor) {
+          const rgbColor = SlidesHelpers.hexToRgbColor(args.textColor);
+          if (rgbColor) {
+            style.foregroundColor = { opaqueColor: { rgbColor } };
+            fields.push('foregroundColor');
+          }
+        }
+
+        if (fields.length > 0) {
+          requests.push({
+            updateTextStyle: {
+              objectId: args.tableObjectId,
+              cellLocation,
+              style,
+              textRange: { type: 'ALL' },
+              fields: fields.join(','),
+            },
+          });
+        }
+      }
+
+      await SlidesHelpers.executeBatchUpdate(slides, args.presentationId, requests);
+
+      return JSON.stringify({
+        success: true,
+        tableObjectId: args.tableObjectId,
+        cell: { rowIndex: args.rowIndex, columnIndex: args.columnIndex },
+        textLength: args.text.length,
+        styled: hasStyleOptions && args.text.length > 0,
+      }, null, 2);
+    } catch (error: any) {
+      log.error(`Error editing table cell: ${error.message}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to edit table cell: ${error.message}`);
     }
   }
 });
