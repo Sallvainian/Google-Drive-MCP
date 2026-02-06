@@ -61,6 +61,30 @@ async function authorizeWithServiceAccount(): Promise<JWT> {
 // --- END OF NEW FUNCTION---
 
 async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
+  // Prefer GOOGLE_REFRESH_TOKEN env var over token.json file
+  if (process.env.GOOGLE_REFRESH_TOKEN) {
+    try {
+      const { client_id, client_secret, redirect_uris } = await loadClientSecrets();
+      const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
+      client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+      await client.refreshAccessToken();
+      return client;
+    } catch (err: unknown) {
+      const msg = ((err as Error).message || '').toLowerCase();
+      if (
+        msg.includes('invalid_grant') ||
+        msg.includes('invalid_client') ||
+        msg.includes('token has been expired') ||
+        msg.includes('token has been revoked')
+      ) {
+        console.error('GOOGLE_REFRESH_TOKEN is invalid, will re-authenticate:', (err as Error).message);
+        return null;
+      }
+      throw new Error(`Failed to verify env var credentials: ${(err as Error).message}`);
+    }
+  }
+
+  // Fall back to token.json file
   let content: Buffer;
   try {
     content = await fs.readFile(TOKEN_PATH);
@@ -78,22 +102,33 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     await client.refreshAccessToken();
 
     return client;
-  } catch (err: any) {
-    const msg = (err.message || '').toLowerCase();
+  } catch (err: unknown) {
+    const msg = ((err as Error).message || '').toLowerCase();
     if (
       msg.includes('invalid_grant') ||
       msg.includes('invalid_client') ||
       msg.includes('token has been expired') ||
       msg.includes('token has been revoked')
     ) {
-      console.error('Saved credentials are invalid, will re-authenticate:', err.message);
+      console.error('Saved credentials are invalid, will re-authenticate:', (err as Error).message);
       return null;
     }
-    throw new Error(`Failed to verify saved credentials: ${err.message}`);
+    throw new Error(`Failed to verify saved credentials: ${(err as Error).message}`);
   }
 }
 
 async function loadClientSecrets() {
+  // Prefer env vars over credentials.json file
+  if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    return {
+      client_id: process.env.GOOGLE_CLIENT_ID,
+      client_secret: process.env.GOOGLE_CLIENT_SECRET,
+      redirect_uris: [process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/'],
+      client_type: 'installed' as const,
+    };
+  }
+
+  // Fall back to credentials.json file
   const content = await fs.readFile(CREDENTIALS_PATH);
   const keys = JSON.parse(content.toString());
   const key = keys.installed || keys.web;
@@ -116,6 +151,13 @@ async function saveCredentials(client: OAuth2Client): Promise<void> {
   });
   await fs.writeFile(TOKEN_PATH, payload);
   console.error('Token stored to', TOKEN_PATH);
+
+  // Hint for env var users
+  if (process.env.GOOGLE_CLIENT_ID) {
+    console.error(
+      `To use env vars instead of token.json, set: GOOGLE_REFRESH_TOKEN="${client.credentials.refresh_token}"`
+    );
+  }
 }
 
 async function authenticate(): Promise<OAuth2Client> {

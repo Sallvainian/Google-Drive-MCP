@@ -169,14 +169,6 @@ return gmail;
 // === HELPER FUNCTIONS ===
 
 /**
- * Escapes a string for safe use inside single-quoted Drive API query values.
- * Backslashes and single quotes must be escaped with a preceding backslash.
- */
-function escapeDriveQuery(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-}
-
-/**
  * Converts Google Docs JSON structure to Markdown format
  */
 function convertDocsJsonToMarkdown(docData: any): string {
@@ -691,63 +683,6 @@ throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`
 });
 
 server.addTool({
-name: 'insertHyperlink',
-description: 'Inserts new hyperlinked text at a specific index, or converts existing text in the document into a clickable hyperlink. Use mode "insert" to add new linked text, or mode "find" to make existing text a link.',
-parameters: DocumentIdParameter.extend({
-url: z.string().url().describe('The URL the hyperlink should point to.'),
-mode: z.enum(['insert', 'find']).describe('"insert" to add new linked text at an index, "find" to convert existing text into a hyperlink.'),
-text: z.string().min(1).describe('For "insert" mode: the display text to insert. For "find" mode: the exact text in the document to convert into a hyperlink.'),
-index: z.number().int().min(1).optional().describe('(insert mode only) The 1-based index where the hyperlinked text should be inserted.'),
-matchInstance: z.number().int().min(1).optional().default(1).describe('(find mode only) Which occurrence of the text to target (1 = first, 2 = second, etc.).'),
-}),
-execute: async (args, { log }) => {
-const docs = await getDocsClient();
-log.info(`insertHyperlink: mode=${args.mode}, text="${args.text}", url="${args.url}"`);
-
-try {
-    if (args.mode === 'insert') {
-        if (args.index === undefined) {
-            throw new UserError('index is required when mode is "insert".');
-        }
-        // Step 1: Insert the text
-        await GDocsHelpers.insertText(docs, args.documentId, args.text, args.index);
-        // Step 2: Apply link style to the inserted text range
-        const startIndex = args.index;
-        const endIndex = args.index + args.text.length;
-        const request: docs_v1.Schema$Request = {
-            updateTextStyle: {
-                range: { startIndex, endIndex },
-                textStyle: { link: { url: args.url } },
-                fields: 'link'
-            }
-        };
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-        return `Inserted hyperlinked text "${args.text}" at index ${args.index}, linking to ${args.url}.`;
-    } else {
-        // find mode: locate existing text and apply link
-        const range = await GDocsHelpers.findTextRange(docs, args.documentId, args.text, args.matchInstance);
-        if (!range) {
-            throw new UserError(`Could not find instance ${args.matchInstance} of text "${args.text}" in the document.`);
-        }
-        const request: docs_v1.Schema$Request = {
-            updateTextStyle: {
-                range: { startIndex: range.startIndex, endIndex: range.endIndex },
-                textStyle: { link: { url: args.url } },
-                fields: 'link'
-            }
-        };
-        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
-        return `Converted text "${args.text}" (instance ${args.matchInstance}) into a hyperlink pointing to ${args.url} (range ${range.startIndex}-${range.endIndex}).`;
-    }
-} catch (error: any) {
-    log.error(`Error in insertHyperlink: ${error.message || error}`);
-    if (error instanceof UserError) throw error;
-    throw new UserError(`Failed to insert hyperlink: ${error.message || 'Unknown error'}`);
-}
-}
-});
-
-server.addTool({
 name: 'deleteRange',
 description: 'Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.',
 parameters: DocumentIdParameter.extend({
@@ -1046,15 +981,9 @@ execute: async (args, { log }) => {
             }
 
             // Step 4: Apply paragraph style
-            // Use paragraphEndIndex to include the trailing newline, enabling styles on empty cells
-            if (args.paragraphStyle) {
-                // Determine the paragraph range end
-                const paraEndIndex = args.textContent !== undefined
-                    ? cellRange.contentStartIndex + (args.textContent.length > 0 ? args.textContent.length + 1 : 1)
-                    : cellRange.paragraphEndIndex;
-
+            if (args.paragraphStyle && newTextEndIndex > cellRange.contentStartIndex) {
                 const paraReq = GDocsHelpers.buildUpdateParagraphStyleRequest(
-                    cellRange.contentStartIndex, paraEndIndex, args.paragraphStyle
+                    cellRange.contentStartIndex, newTextEndIndex, args.paragraphStyle
                 );
                 if (paraReq) requests.push(paraReq.request);
             }
@@ -1616,7 +1545,7 @@ name: 'listGoogleDocs',
 description: 'Lists Google Documents from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter documents by name.'),
+  query: z.string().optional().describe('Search query to filter documents by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -1627,7 +1556,8 @@ try {
   // Build the query string for Google Drive API
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
-    queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
+    // Use name-only search to allow sorting - fullText search doesn't support orderBy
+    queryString += ` and name contains '${args.query}'`;
   }
 
   const response = await drive.files.list({
@@ -1658,6 +1588,11 @@ try {
 } catch (error: any) {
   log.error(`Error listing Google Docs: ${error.message || error}`);
   if (error.code === 403) {
+    // Check if it's an API limitation vs permission error
+    const msg = error.message?.toLowerCase() || '';
+    if (msg.includes('sorting') || msg.includes('fulltext')) {
+      throw new UserError("Google Drive API doesn't support sorting with full-text search. Try searching by name only.");
+    }
     throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
   }
   throw new UserError(`Failed to list documents: ${error.message || 'Unknown error'}`);
@@ -1683,17 +1618,16 @@ try {
 
   // Add search criteria
   if (args.searchIn === 'name') {
-    queryString += ` and name contains '${escapeDriveQuery(args.searchQuery)}'`;
+    queryString += ` and name contains '${args.searchQuery}'`;
   } else if (args.searchIn === 'content') {
-    queryString += ` and fullText contains '${escapeDriveQuery(args.searchQuery)}'`;
+    queryString += ` and fullText contains '${args.searchQuery}'`;
   } else {
-    const escaped = escapeDriveQuery(args.searchQuery);
-    queryString += ` and (name contains '${escaped}' or fullText contains '${escaped}')`;
+    queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
   }
 
   // Add date filter if provided
   if (args.modifiedAfter) {
-    queryString += ` and modifiedTime > '${escapeDriveQuery(args.modifiedAfter)}'`;
+    queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
   }
 
   // fullText search doesn't support orderBy - only apply sorting for name-only search
@@ -2796,7 +2730,7 @@ name: 'listGoogleSheets',
 description: 'Lists Google Spreadsheets from your Google Drive with optional filtering.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of spreadsheets to return (1-100).'),
-  query: z.string().optional().describe('Search query to filter spreadsheets by name.'),
+  query: z.string().optional().describe('Search query to filter spreadsheets by name or content.'),
   orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
 }),
 execute: async (args, { log }) => {
@@ -2806,8 +2740,10 @@ execute: async (args, { log }) => {
   try {
     // Build the query string for Google Drive API
     let queryString = "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false";
+    let usesFullText = false;
     if (args.query) {
-      queryString += ` and name contains '${escapeDriveQuery(args.query)}'`;
+      // Use name-only search to allow sorting, fullText search doesn't support orderBy
+      queryString += ` and name contains '${args.query}'`;
     }
 
     const response = await drive.files.list({
@@ -2838,6 +2774,11 @@ execute: async (args, { log }) => {
   } catch (error: any) {
     log.error(`Error listing Google Sheets: ${error.message || error}`);
     if (error.code === 403) {
+      // Check if this is an actual permission error or an API limitation
+      const errorReason = error.response?.data?.error?.errors?.[0]?.reason;
+      if (errorReason === 'forbidden' && error.message?.includes('Sorting')) {
+        throw new UserError(`API limitation: ${error.message}`);
+      }
       throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
     }
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
@@ -2857,6 +2798,103 @@ const FormattedSectionSchema = z.object({
 });
 
 const FormattedContentSchema = z.array(FormattedSectionSchema).describe('Array of formatted content sections to insert');
+
+type FormattedSection = z.infer<typeof FormattedSectionSchema>;
+
+function buildFormattedContentRequests(
+  sections: FormattedSection[],
+  startingIndex: number
+): { textRequests: docs_v1.Schema$Request[], styleRequests: docs_v1.Schema$Request[], finalIndex: number } {
+  const textRequests: docs_v1.Schema$Request[] = [];
+  const styleRequests: docs_v1.Schema$Request[] = [];
+  let currentIndex = startingIndex;
+
+  for (const section of sections) {
+    const text = section.text + '\n';
+    const textLength = text.length;
+    const startIndex = currentIndex;
+    const endIndex = currentIndex + textLength;
+
+    textRequests.push({
+      insertText: {
+        location: { index: currentIndex },
+        text: text,
+      },
+    });
+
+    let namedStyleType: string | null = null;
+    let isBullet = false;
+    let isNumbered = false;
+
+    switch (section.type) {
+      case 'title': namedStyleType = 'TITLE'; break;
+      case 'subtitle': namedStyleType = 'SUBTITLE'; break;
+      case 'heading1': namedStyleType = 'HEADING_1'; break;
+      case 'heading2': namedStyleType = 'HEADING_2'; break;
+      case 'heading3': namedStyleType = 'HEADING_3'; break;
+      case 'heading4': namedStyleType = 'HEADING_4'; break;
+      case 'bullet': isBullet = true; break;
+      case 'numbered': isNumbered = true; break;
+      default: namedStyleType = 'NORMAL_TEXT'; break;
+    }
+
+    if (namedStyleType) {
+      styleRequests.push({
+        updateParagraphStyle: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          paragraphStyle: { namedStyleType },
+          fields: 'namedStyleType',
+        },
+      });
+    }
+
+    if (isBullet) {
+      styleRequests.push({
+        createParagraphBullets: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+        },
+      });
+    }
+
+    if (isNumbered) {
+      styleRequests.push({
+        createParagraphBullets: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          bulletPreset: 'NUMBERED_DECIMAL_NESTED',
+        },
+      });
+    }
+
+    const textStyleFields: string[] = [];
+    const textStyle: docs_v1.Schema$TextStyle = {};
+
+    if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
+    if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
+    if (section.color) {
+      const hex = section.color.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16) / 255;
+      const g = parseInt(hex.substring(2, 4), 16) / 255;
+      const b = parseInt(hex.substring(4, 6), 16) / 255;
+      textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+      textStyleFields.push('foregroundColor');
+    }
+
+    if (textStyleFields.length > 0) {
+      styleRequests.push({
+        updateTextStyle: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          textStyle,
+          fields: textStyleFields.join(','),
+        },
+      });
+    }
+
+    currentIndex = endIndex;
+  }
+
+  return { textRequests, styleRequests, finalIndex: currentIndex };
+}
 
 server.addTool({
   name: 'createFormattedDocument',
@@ -2904,149 +2942,17 @@ Example content array:
       const documentId = document.id!;
       log.info(`Document created: ${documentId}`);
 
-      // Step 2: Build batch update requests for all content
-      const requests: docs_v1.Schema$Request[] = [];
-      let currentIndex = 1; // Google Docs starts at index 1
-      const styleRequests: docs_v1.Schema$Request[] = [];
+      // Step 2: Build and execute batch update requests for all content
+      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
 
-      // Track bullet list state
-      let inBulletList = false;
-      let bulletListId: string | null = null;
-      let inNumberedList = false;
-      let numberedListId: string | null = null;
-
-      // Process each content section
-      for (let i = 0; i < args.content.length; i++) {
-        const section = args.content[i];
-        const text = section.text + '\n'; // Add newline after each section
-        const textLength = text.length;
-        const startIndex = currentIndex;
-        const endIndex = currentIndex + textLength;
-
-        // Insert the text
-        requests.push({
-          insertText: {
-            location: { index: currentIndex },
-            text: text,
-          },
-        });
-
-        // Determine paragraph style based on type
-        let namedStyleType: string | null = null;
-        let isBullet = false;
-        let isNumbered = false;
-
-        switch (section.type) {
-          case 'title':
-            namedStyleType = 'TITLE';
-            break;
-          case 'subtitle':
-            namedStyleType = 'SUBTITLE';
-            break;
-          case 'heading1':
-            namedStyleType = 'HEADING_1';
-            break;
-          case 'heading2':
-            namedStyleType = 'HEADING_2';
-            break;
-          case 'heading3':
-            namedStyleType = 'HEADING_3';
-            break;
-          case 'heading4':
-            namedStyleType = 'HEADING_4';
-            break;
-          case 'bullet':
-            isBullet = true;
-            break;
-          case 'numbered':
-            isNumbered = true;
-            break;
-          case 'normal':
-          default:
-            namedStyleType = 'NORMAL_TEXT';
-            break;
-        }
-
-        // Apply paragraph style if it's a named style
-        if (namedStyleType) {
-          styleRequests.push({
-            updateParagraphStyle: {
-              range: { startIndex, endIndex: endIndex - 1 }, // Exclude the newline for paragraph style
-              paragraphStyle: {
-                namedStyleType: namedStyleType,
-              },
-              fields: 'namedStyleType',
-            },
-          });
-        }
-
-        // Handle bullet lists
-        if (isBullet) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
-            },
-          });
-        }
-
-        // Handle numbered lists
-        if (isNumbered) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
-            },
-          });
-        }
-
-        // Apply text formatting (bold, italic, color)
-        const textStyleFields: string[] = [];
-        const textStyle: docs_v1.Schema$TextStyle = {};
-
-        if (section.bold) {
-          textStyle.bold = true;
-          textStyleFields.push('bold');
-        }
-        if (section.italic) {
-          textStyle.italic = true;
-          textStyleFields.push('italic');
-        }
-        if (section.color) {
-          // Parse hex color
-          const hex = section.color.replace('#', '');
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
-          textStyle.foregroundColor = {
-            color: { rgbColor: { red: r, green: g, blue: b } },
-          };
-          textStyleFields.push('foregroundColor');
-        }
-
-        if (textStyleFields.length > 0) {
-          styleRequests.push({
-            updateTextStyle: {
-              range: { startIndex, endIndex: endIndex - 1 }, // Exclude newline
-              textStyle: textStyle,
-              fields: textStyleFields.join(','),
-            },
-          });
-        }
-
-        currentIndex = endIndex;
-      }
-
-      // Step 3: Execute batch update - first insert all text, then apply styles
-      if (requests.length > 0) {
+      if (textRequests.length > 0) {
         await docs.documents.batchUpdate({
           documentId: documentId,
-          requestBody: { requests },
+          requestBody: { requests: textRequests },
         });
-        log.info(`Inserted ${requests.length} text sections`);
+        log.info(`Inserted ${textRequests.length} text sections`);
       }
 
-      // Apply styles in a separate batch (after text is inserted)
       if (styleRequests.length > 0) {
         await docs.documents.batchUpdate({
           documentId: documentId,
@@ -3088,135 +2994,14 @@ Example content array:
     log.info(`Inserting ${args.content.length} formatted sections into document ${args.documentId} at index ${args.index}`);
 
     try {
-      const requests: docs_v1.Schema$Request[] = [];
-      let currentIndex = args.index;
-      const styleRequests: docs_v1.Schema$Request[] = [];
+      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, args.index);
 
-      // Process each content section
-      for (let i = 0; i < args.content.length; i++) {
-        const section = args.content[i];
-        const text = section.text + '\n';
-        const textLength = text.length;
-        const startIndex = currentIndex;
-        const endIndex = currentIndex + textLength;
-
-        // Insert the text
-        requests.push({
-          insertText: {
-            location: { index: currentIndex },
-            text: text,
-          },
-        });
-
-        // Determine paragraph style based on type
-        let namedStyleType: string | null = null;
-        let isBullet = false;
-        let isNumbered = false;
-
-        switch (section.type) {
-          case 'title':
-            namedStyleType = 'TITLE';
-            break;
-          case 'subtitle':
-            namedStyleType = 'SUBTITLE';
-            break;
-          case 'heading1':
-            namedStyleType = 'HEADING_1';
-            break;
-          case 'heading2':
-            namedStyleType = 'HEADING_2';
-            break;
-          case 'heading3':
-            namedStyleType = 'HEADING_3';
-            break;
-          case 'heading4':
-            namedStyleType = 'HEADING_4';
-            break;
-          case 'bullet':
-            isBullet = true;
-            break;
-          case 'numbered':
-            isNumbered = true;
-            break;
-          case 'normal':
-          default:
-            namedStyleType = 'NORMAL_TEXT';
-            break;
-        }
-
-        if (namedStyleType) {
-          styleRequests.push({
-            updateParagraphStyle: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              paragraphStyle: {
-                namedStyleType: namedStyleType,
-              },
-              fields: 'namedStyleType',
-            },
-          });
-        }
-
-        if (isBullet) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
-            },
-          });
-        }
-
-        if (isNumbered) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
-            },
-          });
-        }
-
-        // Apply text formatting
-        const textStyleFields: string[] = [];
-        const textStyle: docs_v1.Schema$TextStyle = {};
-
-        if (section.bold) {
-          textStyle.bold = true;
-          textStyleFields.push('bold');
-        }
-        if (section.italic) {
-          textStyle.italic = true;
-          textStyleFields.push('italic');
-        }
-        if (section.color) {
-          const hex = section.color.replace('#', '');
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
-          textStyle.foregroundColor = {
-            color: { rgbColor: { red: r, green: g, blue: b } },
-          };
-          textStyleFields.push('foregroundColor');
-        }
-
-        if (textStyleFields.length > 0) {
-          styleRequests.push({
-            updateTextStyle: {
-              range: { startIndex, endIndex: endIndex - 1 },
-              textStyle: textStyle,
-              fields: textStyleFields.join(','),
-            },
-          });
-        }
-
-        currentIndex = endIndex;
-      }
-
-      // Execute batch update - first insert text, then apply styles
-      if (requests.length > 0) {
+      if (textRequests.length > 0) {
         await docs.documents.batchUpdate({
           documentId: args.documentId,
-          requestBody: { requests },
+          requestBody: { requests: textRequests },
         });
-        log.info(`Inserted ${requests.length} text sections`);
+        log.info(`Inserted ${textRequests.length} text sections`);
       }
 
       if (styleRequests.length > 0) {
@@ -3281,99 +3066,12 @@ IMPORTANT: This will DELETE all existing content and replace it with the new for
       }
 
       // Step 3: Insert new formatted content
-      const requests: docs_v1.Schema$Request[] = [];
-      let currentIndex = 1;
-      const styleRequests: docs_v1.Schema$Request[] = [];
+      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
 
-      for (let i = 0; i < args.content.length; i++) {
-        const section = args.content[i];
-        const text = section.text + '\n';
-        const textLength = text.length;
-        const startIndex = currentIndex;
-        const endIdx = currentIndex + textLength;
-
-        requests.push({
-          insertText: {
-            location: { index: currentIndex },
-            text: text,
-          },
-        });
-
-        let namedStyleType: string | null = null;
-        let isBullet = false;
-        let isNumbered = false;
-
-        switch (section.type) {
-          case 'title': namedStyleType = 'TITLE'; break;
-          case 'subtitle': namedStyleType = 'SUBTITLE'; break;
-          case 'heading1': namedStyleType = 'HEADING_1'; break;
-          case 'heading2': namedStyleType = 'HEADING_2'; break;
-          case 'heading3': namedStyleType = 'HEADING_3'; break;
-          case 'heading4': namedStyleType = 'HEADING_4'; break;
-          case 'bullet': isBullet = true; break;
-          case 'numbered': isNumbered = true; break;
-          default: namedStyleType = 'NORMAL_TEXT'; break;
-        }
-
-        if (namedStyleType) {
-          styleRequests.push({
-            updateParagraphStyle: {
-              range: { startIndex, endIndex: endIdx - 1 },
-              paragraphStyle: { namedStyleType },
-              fields: 'namedStyleType',
-            },
-          });
-        }
-
-        if (isBullet) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIdx - 1 },
-              bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
-            },
-          });
-        }
-
-        if (isNumbered) {
-          styleRequests.push({
-            createParagraphBullets: {
-              range: { startIndex, endIndex: endIdx - 1 },
-              bulletPreset: 'NUMBERED_DECIMAL_NESTED',
-            },
-          });
-        }
-
-        const textStyleFields: string[] = [];
-        const textStyle: docs_v1.Schema$TextStyle = {};
-
-        if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
-        if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
-        if (section.color) {
-          const hex = section.color.replace('#', '');
-          const r = parseInt(hex.substring(0, 2), 16) / 255;
-          const g = parseInt(hex.substring(2, 4), 16) / 255;
-          const b = parseInt(hex.substring(4, 6), 16) / 255;
-          textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
-          textStyleFields.push('foregroundColor');
-        }
-
-        if (textStyleFields.length > 0) {
-          styleRequests.push({
-            updateTextStyle: {
-              range: { startIndex, endIndex: endIdx - 1 },
-              textStyle,
-              fields: textStyleFields.join(','),
-            },
-          });
-        }
-
-        currentIndex = endIdx;
-      }
-
-      if (requests.length > 0) {
+      if (textRequests.length > 0) {
         await docs.documents.batchUpdate({
           documentId: args.documentId,
-          requestBody: { requests },
+          requestBody: { requests: textRequests },
         });
       }
 
@@ -3390,6 +3088,90 @@ IMPORTANT: This will DELETE all existing content and replace it with the new for
       log.error(`Error replacing document content: ${error.message || error}`);
       if (error instanceof UserError) throw error;
       throw new UserError(`Failed to replace document content: ${error.message || 'Unknown error'}`);
+    }
+  }
+});
+
+server.addTool({
+  name: 'updateDocumentSection',
+  description: `Finds a document section by its heading text and replaces the content below it (or the heading + content) with new formatted content. This is the best way to update a specific section of a document without affecting the rest.
+
+The tool finds the heading by exact text match, determines the section boundary (up to the next heading of equal or higher level), deletes that range, and inserts the new formatted content in its place.
+
+Example: To replace everything under "Block 2: Activities" with new content:
+{
+  "documentId": "abc123",
+  "headingText": "Block 2: Activities",
+  "replaceHeading": false,
+  "content": [
+    { "type": "normal", "text": "New activity description here." },
+    { "type": "bullet", "text": "Activity step 1" },
+    { "type": "bullet", "text": "Activity step 2" }
+  ]
+}`,
+  parameters: DocumentIdParameter.extend({
+    headingText: z.string().describe('The heading text to find (exact match, trimmed)'),
+    content: FormattedContentSchema,
+    replaceHeading: z.boolean().default(false).describe('If true, also replaces the heading itself. If false (default), only replaces content below the heading.'),
+  }),
+  execute: async (args, { log }) => {
+    const docs = await getDocsClient();
+    log.info(`Updating section "${args.headingText}" in document ${args.documentId} (replaceHeading: ${args.replaceHeading})`);
+
+    try {
+      // Step 1: Find the section range
+      const range = await GDocsHelpers.findSectionRange(docs, args.documentId, args.headingText);
+      if (!range) {
+        throw new UserError(`Could not find a heading matching "${args.headingText}" in the document. Make sure the heading text is an exact match.`);
+      }
+
+      const { headingStart, headingEnd, sectionEnd } = range;
+
+      // Step 2: Determine delete range
+      const deleteStart = args.replaceHeading ? headingStart : headingEnd;
+      const deleteEnd = sectionEnd;
+
+      // Step 3: Delete the section content
+      if (deleteEnd > deleteStart) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: {
+            requests: [{
+              deleteContentRange: {
+                range: { startIndex: deleteStart, endIndex: deleteEnd - 1 },
+              },
+            }],
+          },
+        });
+        log.info(`Deleted section content (indices ${deleteStart}-${deleteEnd - 1})`);
+      }
+
+      // Step 4: Insert new formatted content at the deletion point
+      const insertIndex = deleteStart;
+      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, insertIndex);
+
+      if (textRequests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests: textRequests },
+        });
+        log.info(`Inserted ${textRequests.length} text sections`);
+      }
+
+      if (styleRequests.length > 0) {
+        await docs.documents.batchUpdate({
+          documentId: args.documentId,
+          requestBody: { requests: styleRequests },
+        });
+        log.info(`Applied ${styleRequests.length} style updates`);
+      }
+
+      return `Successfully updated section "${args.headingText}" with ${args.content.length} formatted sections.${args.replaceHeading ? ' (heading was also replaced)' : ''}`;
+
+    } catch (error: any) {
+      log.error(`Error updating document section: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
+      throw new UserError(`Failed to update document section: ${error.message || 'Unknown error'}`);
     }
   }
 });
@@ -4220,7 +4002,7 @@ server.addTool({
         tableObjectId: args.tableObjectId,
         cell: { rowIndex: args.rowIndex, columnIndex: args.columnIndex },
         textLength: args.text.length,
-        styled: hasStyleOptions && args.text.length > 0,
+        styled: hasStyleOptions,
       }, null, 2);
     } catch (error: any) {
       log.error(`Error editing table cell: ${error.message}`);

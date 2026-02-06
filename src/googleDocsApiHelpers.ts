@@ -831,3 +831,105 @@ export function findTabById(doc: docs_v1.Schema$Document, tabId: string): docs_v
 
     return searchTabs(doc.tabs);
 }
+
+// --- Section Range Helper ---
+
+const HEADING_STYLES: Record<string, number> = {
+  'TITLE': 0,
+  'SUBTITLE': 0,
+  'HEADING_1': 1,
+  'HEADING_2': 2,
+  'HEADING_3': 3,
+  'HEADING_4': 4,
+  'HEADING_5': 5,
+  'HEADING_6': 6,
+};
+
+function getHeadingLevel(namedStyleType: string | null | undefined): number | null {
+  if (!namedStyleType || !(namedStyleType in HEADING_STYLES)) return null;
+  return HEADING_STYLES[namedStyleType];
+}
+
+function getParagraphText(paragraph: docs_v1.Schema$Paragraph): string {
+  let text = '';
+  if (paragraph.elements) {
+    for (const element of paragraph.elements) {
+      if (element.textRun?.content) {
+        text += element.textRun.content;
+      }
+    }
+  }
+  return text.replace(/\n$/, '');
+}
+
+export async function findSectionRange(
+  docs: Docs,
+  documentId: string,
+  headingText: string,
+): Promise<{ headingStart: number; headingEnd: number; sectionEnd: number } | null> {
+  try {
+    const res = await docs.documents.get({
+      documentId,
+      fields: 'body(content(paragraph(elements(textRun(content)),paragraphStyle(namedStyleType)),startIndex,endIndex))',
+    });
+
+    if (!res.data.body?.content) {
+      console.warn(`No content found in document ${documentId}`);
+      return null;
+    }
+
+    const content = res.data.body.content;
+    let headingStart: number | null = null;
+    let headingEnd: number | null = null;
+    let headingLevel: number | null = null;
+
+    // Step 1: Find the heading paragraph matching the text
+    for (let i = 0; i < content.length; i++) {
+      const element = content[i];
+      if (!element.paragraph) continue;
+
+      const style = element.paragraph.paragraphStyle?.namedStyleType;
+      const level = getHeadingLevel(style);
+      if (level === null) continue;
+
+      const text = getParagraphText(element.paragraph);
+      if (text.trim() === headingText.trim()) {
+        headingStart = element.startIndex ?? null;
+        headingEnd = element.endIndex ?? null;
+        headingLevel = level;
+
+        // Step 2: Scan forward to find section end
+        let sectionEnd = headingEnd!;
+        for (let j = i + 1; j < content.length; j++) {
+          const nextElement = content[j];
+          if (nextElement.paragraph) {
+            const nextStyle = nextElement.paragraph.paragraphStyle?.namedStyleType;
+            const nextLevel = getHeadingLevel(nextStyle);
+            // Stop at same-or-higher level heading (lower number = higher level)
+            if (nextLevel !== null && nextLevel <= headingLevel) {
+              break;
+            }
+          }
+          sectionEnd = nextElement.endIndex ?? sectionEnd;
+        }
+
+        if (headingStart === null || headingEnd === null) {
+          console.warn(`Heading "${headingText}" found but missing index data`);
+          return null;
+        }
+
+        console.log(`Found section "${headingText}" (level ${headingLevel}): heading=${headingStart}-${headingEnd}, sectionEnd=${sectionEnd}`);
+        return { headingStart, headingEnd, sectionEnd };
+      }
+    }
+
+    console.warn(`Heading "${headingText}" not found in document ${documentId}`);
+    return null;
+  } catch (error: unknown) {
+    const err = error as { code?: number; message?: string };
+    console.error(`Error finding section range for "${headingText}" in doc ${documentId}: ${err.message || 'Unknown error'}`);
+    if (err.code === 404) throw new UserError(`Document not found (ID: ${documentId}).`);
+    if (err.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
+    throw new Error(`Failed to find section range: ${err.message || 'Unknown error'}`);
+  }
+}

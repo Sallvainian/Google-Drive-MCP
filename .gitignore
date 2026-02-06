@@ -9,8 +9,18 @@ token.json
 # Log files
 *.log
 
-# Environment variables (if you use a .env file later)
+# Environment variables
 .env*
+
+# Backup files (use git history instead)
+*.bak
+src/backup/
+
+# Bundled output files
+repomix-output*
+
+# One-off utility scripts
+export-docs.mjs
 
 # Local workspace / session files
 .claude/
