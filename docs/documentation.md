@@ -167,7 +167,7 @@ MCP Client (Claude/VS Code)
 ```
 mcp-googledocs-server/
 ├── docs/                    # ← YOU ARE HERE
-│   ├── index.md            # This file
+│   ├── documentation.md    # This file
 │   ├── architecture.md     # System design (92 tools)
 │   ├── source-tree.md      # Code structure (9,180 LOC)
 │   └── developer-guide.md  # Contributing guide

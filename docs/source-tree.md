@@ -36,7 +36,7 @@ mcp-googledocs-server/
 │   └── gmailFilterManager.js
 │
 ├── docs/                             # Generated documentation
-│   ├── index.md                      # Master index
+│   ├── documentation.md              # Master index
 │   ├── architecture.md               # Architecture overview
 │   ├── source-tree.md                # This file
 │   ├── developer-guide.md            # Developer guide
