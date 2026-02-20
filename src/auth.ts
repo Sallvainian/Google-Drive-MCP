@@ -60,6 +60,27 @@ async function authorizeWithServiceAccount(): Promise<JWT> {
 }
 // --- END OF NEW FUNCTION---
 
+function installTokenRefreshListener(client: OAuth2Client): void {
+  client.on('tokens', (tokens) => {
+    if (tokens.refresh_token) {
+      console.error('Received rotated refresh token, persisting to disk...');
+      client.setCredentials(tokens);
+      saveCredentials(client).catch((err) => {
+        console.error('Failed to persist rotated refresh token:', err.message);
+      });
+    }
+  });
+}
+
+function isRecoverableAuthError(msg: string): boolean {
+  return (
+    msg.includes('invalid_grant') ||
+    msg.includes('invalid_client') ||
+    msg.includes('token has been expired') ||
+    msg.includes('token has been revoked')
+  );
+}
+
 async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
   // Prefer GOOGLE_REFRESH_TOKEN env var over token.json file
   if (process.env.GOOGLE_REFRESH_TOKEN) {
@@ -67,16 +88,17 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
       const { client_id, client_secret, redirect_uris } = await loadClientSecrets();
       const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
       client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
-      await client.refreshAccessToken();
+      installTokenRefreshListener(client);
+      const { credentials } = await client.refreshAccessToken();
+      // Persist if Google rotated the refresh token
+      if (credentials.refresh_token && credentials.refresh_token !== process.env.GOOGLE_REFRESH_TOKEN) {
+        console.error('Refresh token was rotated during startup verification, saving...');
+        await saveCredentials(client);
+      }
       return client;
     } catch (err: unknown) {
       const msg = ((err as Error).message || '').toLowerCase();
-      if (
-        msg.includes('invalid_grant') ||
-        msg.includes('invalid_client') ||
-        msg.includes('token has been expired') ||
-        msg.includes('token has been revoked')
-      ) {
+      if (isRecoverableAuthError(msg)) {
         console.error('GOOGLE_REFRESH_TOKEN is invalid, will re-authenticate:', (err as Error).message);
         return null;
       }
@@ -97,19 +119,19 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     const { client_secret, client_id, redirect_uris } = await loadClientSecrets();
     const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
     client.setCredentials(credentials);
+    installTokenRefreshListener(client);
 
     // Verify token is still valid
-    await client.refreshAccessToken();
-
+    const { credentials: refreshed } = await client.refreshAccessToken();
+    // Persist if Google rotated the refresh token
+    if (refreshed.refresh_token && refreshed.refresh_token !== credentials.refresh_token) {
+      console.error('Refresh token was rotated during startup verification, saving...');
+      await saveCredentials(client);
+    }
     return client;
   } catch (err: unknown) {
     const msg = ((err as Error).message || '').toLowerCase();
-    if (
-      msg.includes('invalid_grant') ||
-      msg.includes('invalid_client') ||
-      msg.includes('token has been expired') ||
-      msg.includes('token has been revoked')
-    ) {
+    if (isRecoverableAuthError(msg)) {
       console.error('Saved credentials are invalid, will re-authenticate:', (err as Error).message);
       return null;
     }
@@ -244,6 +266,7 @@ async function authenticate(): Promise<OAuth2Client> {
     try {
       const { tokens } = await oAuth2Client.getToken(code);
       oAuth2Client.setCredentials(tokens);
+      installTokenRefreshListener(oAuth2Client);
       if (tokens.refresh_token) {
         await saveCredentials(oAuth2Client);
       } else {

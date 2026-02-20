@@ -2320,6 +2320,130 @@ try {
 }
 });
 
+server.addTool({
+name: 'downloadFile',
+description: 'Downloads a file from Google Drive to the local filesystem. For Google Docs/Sheets/Slides (native Google formats), exports them to appropriate Office formats (docx, xlsx, pptx). For regular uploaded files (PDF, images, etc.), downloads them directly.',
+parameters: z.object({
+  fileId: z.string().describe('Google Drive file ID to download.'),
+  savePath: z.string().describe('Absolute path to the local directory where the file should be saved.'),
+  filename: z.string().optional().describe('Optional override for the filename. If not provided, uses the original file name from Drive.'),
+}),
+execute: async (args, { log }) => {
+const drive = await getDriveClient();
+const fs = await import('fs');
+const path = await import('path');
+
+log.info(`Downloading file ${args.fileId} to ${args.savePath}`);
+
+// Validate that savePath directory exists
+if (!fs.existsSync(args.savePath)) {
+  throw new UserError(`Directory not found: ${args.savePath}. Please create the directory first.`);
+}
+
+const stat = fs.statSync(args.savePath);
+if (!stat.isDirectory()) {
+  throw new UserError(`savePath must be a directory, not a file: ${args.savePath}`);
+}
+
+try {
+  // Get file metadata to determine type and name
+  const fileInfo = await drive.files.get({
+    fileId: args.fileId,
+    fields: 'id,name,mimeType,size',
+  });
+
+  const fileMimeType = fileInfo.data.mimeType || '';
+  const originalName = fileInfo.data.name || 'untitled';
+
+  // Map of Google native MIME types to export formats
+  const googleExportMap: { [key: string]: { mimeType: string; extension: string } } = {
+    'application/vnd.google-apps.document': {
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      extension: '.docx',
+    },
+    'application/vnd.google-apps.spreadsheet': {
+      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      extension: '.xlsx',
+    },
+    'application/vnd.google-apps.presentation': {
+      mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      extension: '.pptx',
+    },
+    'application/vnd.google-apps.drawing': {
+      mimeType: 'application/pdf',
+      extension: '.pdf',
+    },
+  };
+
+  const isGoogleNative = fileMimeType in googleExportMap;
+  let finalFilename: string;
+  let localFilePath: string;
+
+  if (isGoogleNative) {
+    // For Google native formats, export to Office format
+    const exportConfig = googleExportMap[fileMimeType];
+
+    // Determine filename: use override or original name + appropriate extension
+    if (args.filename) {
+      finalFilename = args.filename;
+      // Add extension if not already present
+      if (!finalFilename.toLowerCase().endsWith(exportConfig.extension)) {
+        finalFilename += exportConfig.extension;
+      }
+    } else {
+      finalFilename = originalName + exportConfig.extension;
+    }
+
+    localFilePath = path.join(args.savePath, finalFilename);
+
+    log.info(`Exporting Google native file as ${exportConfig.extension} to ${localFilePath}`);
+
+    const response = await drive.files.export({
+      fileId: args.fileId,
+      mimeType: exportConfig.mimeType,
+    }, {
+      responseType: 'arraybuffer',
+    });
+
+    const buffer = Buffer.from(response.data as ArrayBuffer);
+    fs.writeFileSync(localFilePath, buffer);
+
+    return `Successfully downloaded "${originalName}" (exported as ${exportConfig.extension})\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
+  } else {
+    // For regular files, download directly
+    if (args.filename) {
+      finalFilename = args.filename;
+    } else {
+      finalFilename = originalName;
+    }
+
+    localFilePath = path.join(args.savePath, finalFilename);
+
+    log.info(`Downloading regular file to ${localFilePath}`);
+
+    const response = await drive.files.get({
+      fileId: args.fileId,
+      alt: 'media',
+    }, {
+      responseType: 'arraybuffer',
+    });
+
+    const buffer = Buffer.from(response.data as ArrayBuffer);
+    fs.writeFileSync(localFilePath, buffer);
+
+    return `Successfully downloaded "${originalName}"\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
+  }
+} catch (error: any) {
+  log.error(`Error downloading file: ${error.message || error}`);
+  if (error.code === 404) throw new UserError("File not found. Check the file ID.");
+  if (error.code === 403) throw new UserError("Permission denied. Make sure you have read access to this file.");
+  if (error.code === 'ENOSPC') throw new UserError("No space left on device. Free up disk space and try again.");
+  if (error.code === 'EACCES') throw new UserError(`Permission denied writing to: ${args.savePath}. Check directory permissions.`);
+  throw new UserError(`Failed to download file: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
 // --- Document Creation Tools ---
 
 server.addTool({
