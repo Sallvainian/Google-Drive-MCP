@@ -6,13 +6,13 @@
 **Type**: Library (MCP Server)
 **Framework**: FastMCP 3.24.0
 **Language**: TypeScript
-**Generated**: 2026-01-22
+**Generated**: 2026-02-19
 
 ---
 
 ## Executive Summary
 
-The Google Docs MCP Server is a Model Context Protocol (MCP) server that provides **92 tools** for interacting with Google Workspace APIs (Docs, Sheets, Slides, Drive, and Gmail). It enables AI assistants like Claude to programmatically read, write, format, and manage Google documents, spreadsheets, presentations, and email.
+The Google Docs MCP Server is a Model Context Protocol (MCP) server that provides **99 tools** for interacting with Google Workspace APIs (Docs, Sheets, Slides, Drive, and Gmail). It enables AI assistants like Claude to programmatically read, write, format, and manage Google documents, spreadsheets, presentations, and email.
 
 ---
 
@@ -70,13 +70,13 @@ The Google Docs MCP Server is a Model Context Protocol (MCP) server that provide
 | File | Purpose |
 |------|---------|
 | `index.js` | Node.js entry point, imports compiled `dist/server.js` |
-| `src/server.ts` | Main server implementation with all 92 tool definitions |
+| `src/server.ts` | Main server implementation with all 99 tool definitions |
 
 ### 2. Core Modules
 
 | Module | Lines | Responsibility |
 |--------|-------|----------------|
-| `server.ts` | 5,301 | Main server, 92 tool definitions, MCP protocol handling |
+| `server.ts` | 5,301 | Main server, 99 tool definitions, MCP protocol handling |
 | `auth.ts` | 226 | OAuth2 flow, service account JWT, token management |
 | `types.ts` | 386 | Zod schemas, TypeScript types, parameter validation |
 
@@ -332,7 +332,7 @@ API Error → Check Error Code → Map to UserError → Return Friendly Message
 ## Key Design Decisions
 
 ### 1. Monolithic Server Architecture
-**Decision:** All 92 tools in a single server process.
+**Decision:** All 99 tools in a single server process.
 **Rationale:** Simplified deployment, shared authentication state, lower memory footprint.
 
 ### 2. Zod Schema Validation

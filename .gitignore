@@ -27,7 +27,6 @@ export-docs.mjs
 .mcp.json
 .playwright-mcp/
 _bmad/
-_bmad-output/
 
 # macOS
 .DS_Store 
