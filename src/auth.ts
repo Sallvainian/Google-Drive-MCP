@@ -99,10 +99,11 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     } catch (err: unknown) {
       const msg = ((err as Error).message || '').toLowerCase();
       if (isRecoverableAuthError(msg)) {
-        console.error('GOOGLE_REFRESH_TOKEN is invalid, will re-authenticate:', (err as Error).message);
-        return null;
+        // Fall through to token file — don't trigger interactive OAuth for a stale env var
+        console.error('GOOGLE_REFRESH_TOKEN is invalid, falling back to token file:', (err as Error).message);
+      } else {
+        throw new Error(`Failed to verify env var credentials: ${(err as Error).message}`);
       }
-      throw new Error(`Failed to verify env var credentials: ${(err as Error).message}`);
     }
   }
 
