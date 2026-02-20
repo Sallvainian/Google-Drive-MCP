@@ -2320,6 +2320,38 @@ try {
 }
 });
 
+async function exportViaWebUrl(fileId: string, mimeType: string): Promise<Buffer> {
+  const exportUrlMap: { [key: string]: string } = {
+    'application/vnd.google-apps.document':
+      `https://docs.google.com/document/d/${fileId}/export?format=docx`,
+    'application/vnd.google-apps.spreadsheet':
+      `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`,
+    'application/vnd.google-apps.presentation':
+      `https://docs.google.com/presentation/d/${fileId}/export/pptx`,
+    'application/vnd.google-apps.drawing':
+      `https://docs.google.com/drawings/d/${fileId}/export?format=pdf`,
+  };
+
+  const url = exportUrlMap[mimeType];
+  if (!url) throw new UserError(`No web export URL for MIME type: ${mimeType}`);
+
+  const tokenResponse = await authClient!.getAccessToken();
+  const accessToken = tokenResponse.token;
+  if (!accessToken) throw new UserError('Failed to obtain access token for large file export.');
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    redirect: 'follow',
+  });
+
+  if (!response.ok) {
+    if (response.status === 403) throw new UserError('Permission denied. Check file access.');
+    throw new UserError(`Web export failed: ${response.statusText} (${response.status})`);
+  }
+
+  return Buffer.from(await response.arrayBuffer());
+}
+
 server.addTool({
 name: 'downloadFile',
 description: 'Downloads a file from Google Drive to the local filesystem. For Google Docs/Sheets/Slides (native Google formats), exports them to appropriate Office formats (docx, xlsx, pptx). For regular uploaded files (PDF, images, etc.), downloads them directly.',
@@ -2398,16 +2430,26 @@ try {
 
     log.info(`Exporting Google native file as ${exportConfig.extension} to ${localFilePath}`);
 
-    const response = await drive.files.export({
-      fileId: args.fileId,
-      mimeType: exportConfig.mimeType,
-    }, {
-      responseType: 'arraybuffer',
-    });
+    let buffer: Buffer;
+    try {
+      const response = await drive.files.export({
+        fileId: args.fileId,
+        mimeType: exportConfig.mimeType,
+      }, {
+        responseType: 'arraybuffer',
+      });
+      buffer = Buffer.from(response.data as ArrayBuffer);
+    } catch (exportError: any) {
+      if (exportError.code === 403) {
+        // File exceeds 10MB API export limit — fall back to web URL export
+        log.info(`File too large for API export (>10MB), falling back to web URL export`);
+        buffer = await exportViaWebUrl(args.fileId, fileMimeType);
+      } else {
+        throw exportError;
+      }
+    }
 
-    const buffer = Buffer.from(response.data as ArrayBuffer);
     fs.writeFileSync(localFilePath, buffer);
-
     return `Successfully downloaded "${originalName}" (exported as ${exportConfig.extension})\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
   } else {
     // For regular files, download directly
@@ -2436,7 +2478,7 @@ try {
 } catch (error: any) {
   log.error(`Error downloading file: ${error.message || error}`);
   if (error.code === 404) throw new UserError("File not found. Check the file ID.");
-  if (error.code === 403) throw new UserError("Permission denied. Make sure you have read access to this file.");
+  if (error.code === 403) throw new UserError("Permission denied or file too large to export (>10MB via API). Check file access permissions.");
   if (error.code === 'ENOSPC') throw new UserError("No space left on device. Free up disk space and try again.");
   if (error.code === 'EACCES') throw new UserError(`Permission denied writing to: ${args.savePath}. Check directory permissions.`);
   throw new UserError(`Failed to download file: ${error.message || 'Unknown error'}`);
