@@ -1,0 +1,50 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-01-22T10:15:00Z",
+    "last_updated": "2026-01-22T10:20:00Z"
+  },
+  "mode": "full_rescan",
+  "scan_level": "exhaustive",
+  "project_root": "/Users/sallvain/Projects/Google-Drive-MCP",
+  "output_folder": "/Users/sallvain/Projects/Google-Drive-MCP/docs",
+  "completed_steps": [
+    {"step": "step_1", "status": "completed", "timestamp": "2026-01-22T10:20:00Z", "summary": "Classified as monolith library with 92 MCP tools across 5 Google APIs"}
+  ],
+  "current_step": "step_2",
+  "findings": {
+    "step_1": {
+      "repository_type": "monolith",
+      "project_type_id": "library",
+      "project_category": "MCP Server / API Integration Library",
+      "primary_language": "TypeScript",
+      "framework": "FastMCP 3.24.0",
+      "total_tools": 92,
+      "tool_categories": {
+        "docs_core": 5,
+        "formatting": 3,
+        "structure": 7,
+        "comments": 6,
+        "drive": 14,
+        "sheets": 8,
+        "enhanced_formatting": 3,
+        "slides": 16,
+        "gmail": 34
+      },
+      "source_files_count": 9,
+      "total_loc": 9180,
+      "api_integrations": [
+        "Google Docs API v1",
+        "Google Drive API v3",
+        "Google Sheets API v4",
+        "Google Slides API v1",
+        "Gmail API v1"
+      ]
+    }
+  },
+  "project_types": [
+    {"part_id": "main", "project_type_id": "library", "display_name": "MCP Server Library"}
+  ],
+  "outputs_generated": ["project-scan-report.json"],
+  "resume_instructions": "Starting step 2 - discovering existing documentation"
+}
