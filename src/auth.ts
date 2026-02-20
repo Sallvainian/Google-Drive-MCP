@@ -285,26 +285,47 @@ async function authenticate(): Promise<OAuth2Client> {
   }
 }
 
+async function enforceRequiredAccount(client: OAuth2Client | JWT): Promise<void> {
+  const required = process.env.REQUIRED_ACCOUNT_EMAIL;
+  if (!required) return;
+
+  const drive = google.drive({ version: 'v3', auth: client as OAuth2Client });
+  const { data } = await drive.about.get({ fields: 'user' });
+  const actual = data.user?.emailAddress ?? '(unknown)';
+
+  if (actual.toLowerCase() !== required.toLowerCase()) {
+    throw new Error(
+      `Account mismatch: expected "${required}" but authenticated as "${actual}". ` +
+      `Delete the token file at ${TOKEN_PATH} and re-authenticate with the correct account.`
+    );
+  }
+  console.error(`Account verified: ${actual}`);
+}
+
 // --- MODIFIED: The Main Exported Function ---
 // This function now acts as a router. It checks for the environment
 // variable and decides which authentication method to use.
 export async function authorize(): Promise<OAuth2Client | JWT> {
+  let client: OAuth2Client | JWT;
+
   // Check if the Service Account environment variable is set.
   if (process.env.SERVICE_ACCOUNT_PATH) {
     console.error('Service account path detected. Attempting service account authentication...');
-    return authorizeWithServiceAccount();
+    client = await authorizeWithServiceAccount();
   } else {
     // If not, execute the original OAuth 2.0 flow exactly as it was.
     console.error('No service account path detected. Falling back to standard OAuth 2.0 flow...');
-    let client = await loadSavedCredentialsIfExist();
-    if (client) {
-      // Optional: Add token refresh logic here if needed, though library often handles it.
+    let oauthClient = await loadSavedCredentialsIfExist();
+    if (oauthClient) {
       console.error('Using saved credentials.');
-      return client;
+      client = oauthClient;
+    } else {
+      console.error('Starting authentication flow...');
+      client = await authenticate();
     }
-    console.error('Starting authentication flow...');
-    client = await authenticate();
-    return client;
   }
+
+  await enforceRequiredAccount(client);
+  return client;
 }
 // --- END OF MODIFIED: The Main Exported Function ---
