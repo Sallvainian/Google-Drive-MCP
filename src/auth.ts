@@ -61,6 +61,7 @@ async function authorizeWithServiceAccount(): Promise<JWT> {
 // --- END OF NEW FUNCTION---
 
 function installTokenRefreshListener(client: OAuth2Client): void {
+  client.removeAllListeners('tokens');
   client.on('tokens', (tokens) => {
     if (tokens.refresh_token) {
       console.error('Received rotated refresh token, persisting to disk...');
@@ -87,7 +88,7 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     try {
       const { client_id, client_secret, redirect_uris } = await loadClientSecrets();
       const client = new google.auth.OAuth2(client_id, client_secret, redirect_uris?.[0]);
-      client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN });
+      client.setCredentials({ refresh_token: process.env.GOOGLE_REFRESH_TOKEN, expiry_date: 1 });
       installTokenRefreshListener(client);
       const { credentials } = await client.refreshAccessToken();
       // Persist if Google rotated the refresh token
@@ -171,6 +172,10 @@ async function saveCredentials(client: OAuth2Client): Promise<void> {
     client_id: client_id,
     client_secret: client_secret,
     refresh_token: client.credentials.refresh_token,
+    access_token: client.credentials.access_token,
+    expiry_date: client.credentials.expiry_date,
+    token_type: client.credentials.token_type,
+    scope: client.credentials.scope,
   });
   await fs.writeFile(TOKEN_PATH, payload);
   console.error('Token stored to', TOKEN_PATH);
