@@ -334,8 +334,8 @@ server.addTool({
 name: 'readGoogleDoc',
 description: 'Reads the content of a specific Google Document, optionally returning structured data.',
 parameters: DocumentIdParameter.extend({
-format: z.enum(['text', 'json', 'markdown']).optional().default('text')
-.describe("Output format: 'text' (plain text), 'json' (raw API structure, complex), 'markdown' (experimental conversion)."),
+format: z.enum(['text', 'json', 'markdown']).optional().default('markdown')
+.describe("Output format: 'markdown' (default, preserves table structure), 'text' (plain text, no structure), 'json' (raw API structure, verbose)."),
 maxLength: z.number().optional().describe('Maximum character limit for text output. If not specified, returns full document content. Use this to limit very large documents.'),
 tabId: z.string().optional().describe('The ID of the specific tab to read. If not specified, reads the first tab (or legacy document.body for documents without tabs).')
 }),
@@ -646,6 +646,7 @@ textToInsert: z.string().min(1).describe('The text to insert.'),
 index: z.number().int().min(1).describe('The index (1-based) where the text should be inserted.'),
 tabId: z.string().optional().describe('The ID of the specific tab to insert into. If not specified, inserts into the first tab (or legacy document.body for documents without tabs).')
 }),
+
 execute: async (args, { log }) => {
 const docs = await getDocsClient();
 log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
@@ -679,6 +680,39 @@ log.error(`Error inserting text in doc ${args.documentId}: ${error.message || er
 if (error instanceof UserError) throw error;
 throw new UserError(`Failed to insert text: ${error.message || 'Unknown error'}`);
 }
+}
+});
+
+server.addTool({
+name: 'replaceAllText',
+description: 'Finds and replaces all occurrences of a text string in a Google Document. Useful for adapting templates or bulk text changes.',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  findText: z.string().min(1).describe('The text to find.'),
+  replaceText: z.string().describe('The replacement text.'),
+  matchCase: z.boolean().optional().default(true).describe('Whether the search should be case-sensitive.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Replacing all "${args.findText}" with "${args.replaceText}" in doc ${args.documentId}`);
+  try {
+    const request: docs_v1.Schema$Request = {
+      replaceAllText: {
+        containsText: {
+          text: args.findText,
+          matchCase: args.matchCase,
+        },
+        replaceText: args.replaceText,
+      },
+    };
+    const result = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    const occurrences = result.replies?.[0]?.replaceAllText?.occurrencesChanged || 0;
+    return `Replaced ${occurrences} occurrence(s) of "${args.findText}" with "${args.replaceText}".`;
+  } catch (error: any) {
+    log.error(`Error replacing text in doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to replace text: ${error.message || 'Unknown error'}`);
+  }
 }
 });
 
@@ -917,29 +951,58 @@ throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'editTableCell',
-description: 'Edits the content and/or basic style of a specific table cell. Requires knowing table start index.',
+description: 'Edits the content and/or basic style of a specific table cell. Provide either tableStartIndex OR searchText to locate the table. Use headerText to target the cell directly below a named header cell (the easiest option for template-style tables).',
 parameters: DocumentIdParameter.extend({
-tableStartIndex: z.number().int().min(1).describe("The starting index of the TABLE element itself (tricky to find, may require reading structure first)."),
-rowIndex: z.number().int().min(0).describe("Row index (0-based)."),
-columnIndex: z.number().int().min(0).describe("Column index (0-based)."),
+tableStartIndex: z.number().int().min(1).optional().describe("The starting index of the TABLE element itself. Optional if searchText or headerText is provided."),
+searchText: z.string().optional().describe("Text to search for in any table cell to auto-locate the table. Use this instead of tableStartIndex when you don't know the index."),
+headerText: z.string().optional().describe("Text of the header cell. The tool will automatically edit the content cell directly below it. Overrides rowIndex/columnIndex."),
+rowIndex: z.number().int().min(0).optional().describe("Row index (0-based). Not required when headerText is provided."),
+columnIndex: z.number().int().min(0).optional().describe("Column index (0-based). Not required when headerText is provided."),
 textContent: z.string().optional().describe("Optional: New text content for the cell. Replaces existing content."),
-// Combine basic styles for simplicity here. More advanced cell styling might need separate tools.
 textStyle: TextStyleParameters.optional().describe("Optional: Text styles to apply."),
 paragraphStyle: ParagraphStyleParameters.optional().describe("Optional: Paragraph styles (like alignment) to apply."),
-// cellBackgroundColor: z.string().optional()... // Cell-specific styles are complex
 }),
 execute: async (args, { log }) => {
         const docs = await getDocsClient();
-        log.info(`Editing cell (${args.rowIndex}, ${args.columnIndex}) in table starting at ${args.tableStartIndex}, doc ${args.documentId}`);
+
+        let tableStartIndex = args.tableStartIndex;
+        let rowIndex = args.rowIndex ?? 0;
+        let columnIndex = args.columnIndex ?? 0;
+
+        if (args.headerText) {
+            const found = await GDocsHelpers.findCellBelowHeader(docs, args.documentId, args.headerText);
+            if (found === null) {
+                throw new UserError(`No header cell found containing text: "${args.headerText}"`);
+            }
+            tableStartIndex = found.tableStartIndex;
+            rowIndex = found.rowIndex;
+            columnIndex = found.columnIndex;
+            log.info(`Found content cell below header "${args.headerText}": table=${tableStartIndex}, row=${rowIndex}, col=${columnIndex}`);
+        } else if (tableStartIndex === undefined) {
+            if (!args.searchText) {
+                throw new UserError("Provide one of: headerText, searchText, or tableStartIndex.");
+            }
+            const found = await GDocsHelpers.findTableStartIndexByText(docs, args.documentId, args.searchText);
+            if (found === null) {
+                throw new UserError(`No table found containing text: "${args.searchText}"`);
+            }
+            tableStartIndex = found;
+            log.info(`Found table via searchText "${args.searchText}" at index ${tableStartIndex}`);
+        }
+
+        if (args.rowIndex !== undefined) rowIndex = args.rowIndex;
+        if (args.columnIndex !== undefined) columnIndex = args.columnIndex;
+
+        log.info(`Editing cell (${rowIndex}, ${columnIndex}) in table starting at ${tableStartIndex}, doc ${args.documentId}`);
 
         try {
             // Step 1: Get cell range
             const cellRange = await GDocsHelpers.getTableCellRange(
-                docs, args.documentId, args.tableStartIndex, args.rowIndex, args.columnIndex
+                docs, args.documentId, tableStartIndex!, rowIndex, columnIndex
             );
 
             if (!cellRange) {
-                throw new UserError(`Could not find cell at row ${args.rowIndex}, column ${args.columnIndex}`);
+                throw new UserError(`Could not find cell at row ${rowIndex}, column ${columnIndex}`);
             }
 
             const requests: docs_v1.Schema$Request[] = [];
@@ -994,13 +1057,77 @@ execute: async (args, { log }) => {
             }
 
             await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
-            return `Successfully edited cell (${args.rowIndex}, ${args.columnIndex}).`;
+            return `Successfully edited cell (${rowIndex}, ${columnIndex}).`;
         } catch (error: any) {
-            log.error(`Error editing cell (${args.rowIndex}, ${args.columnIndex}): ${error.message || error}`);
+            log.error(`Error editing cell (${rowIndex}, ${columnIndex}): ${error.message || error}`);
             if (error instanceof UserError) throw error;
             throw new UserError(`Failed to edit table cell: ${error.message || 'Unknown error'}`);
         }
     }
+});
+
+server.addTool({
+name: 'insertDocTableRow',
+description: 'Inserts a new row into a table in a Google Document. Requires the table start index (use readGoogleDoc with format: json to find it).',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  tableStartIndex: z.number().int().min(0).describe('Start index of the table in the document. Use readGoogleDoc with format: json to find this.'),
+  rowIndex: z.number().int().min(0).describe('0-based row index. The new row will be inserted relative to this row.'),
+  insertAbove: z.boolean().optional().default(false).describe('If true, insert above the specified row instead of below.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Inserting table row ${args.insertAbove ? 'above' : 'below'} row ${args.rowIndex} in table at index ${args.tableStartIndex}, doc ${args.documentId}`);
+  try {
+    const request: docs_v1.Schema$Request = {
+      insertTableRow: {
+        tableCellLocation: {
+          tableStartLocation: { index: args.tableStartIndex },
+          rowIndex: args.rowIndex,
+          columnIndex: 0,
+        },
+        insertBelow: !args.insertAbove,
+      },
+    };
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully inserted row ${args.insertAbove ? 'above' : 'below'} row ${args.rowIndex}.`;
+  } catch (error: any) {
+    log.error(`Error inserting table row: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert table row: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'deleteDocTableRow',
+description: 'Deletes a row from a table in a Google Document. Requires the table start index (use readGoogleDoc with format: json to find it).',
+parameters: z.object({
+  documentId: z.string().describe('The ID of the Google Document.'),
+  tableStartIndex: z.number().int().min(0).describe('Start index of the table in the document.'),
+  rowIndex: z.number().int().min(0).describe('0-based index of the row to delete.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Deleting table row ${args.rowIndex} in table at index ${args.tableStartIndex}, doc ${args.documentId}`);
+  try {
+    const request: docs_v1.Schema$Request = {
+      deleteTableRow: {
+        tableCellLocation: {
+          tableStartLocation: { index: args.tableStartIndex },
+          rowIndex: args.rowIndex,
+          columnIndex: 0,
+        },
+      },
+    };
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully deleted row ${args.rowIndex}.`;
+  } catch (error: any) {
+    log.error(`Error deleting table row: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to delete table row: ${error.message || 'Unknown error'}`);
+  }
+}
 });
 
 server.addTool({
@@ -1542,28 +1669,37 @@ execute: async (args, { log }) => {
 
 server.addTool({
 name: 'listGoogleDocs',
-description: 'Lists Google Documents from your Google Drive with optional filtering.',
+description: 'Lists Google Documents from your Google Drive with optional filtering. Supports searching by name, content, or both.',
 parameters: z.object({
   maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of documents to return (1-100).'),
   query: z.string().optional().describe('Search query to filter documents by name or content.'),
-  orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
+  searchIn: z.enum(['name', 'content', 'both']).optional().default('name').describe('Where to search when query is provided: document name, content, or both. Note: content/both searches cannot be sorted.'),
+  orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results. Ignored when searchIn is "content" or "both" (Google API limitation).'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
-log.info(`Listing Google Docs. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
+log.info(`Listing Google Docs. Query: ${args.query || 'none'}, SearchIn: ${args.searchIn}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
 
 try {
   // Build the query string for Google Drive API
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
-    // Use name-only search to allow sorting - fullText search doesn't support orderBy
-    queryString += ` and name contains '${args.query}'`;
+    if (args.searchIn === 'name') {
+      queryString += ` and name contains '${args.query}'`;
+    } else if (args.searchIn === 'content') {
+      queryString += ` and fullText contains '${args.query}'`;
+    } else { // both
+      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+    }
   }
+
+  // Drop orderBy when using fullText (Google Drive API returns 403 otherwise)
+  const usesFullText = args.query && (args.searchIn === 'content' || args.searchIn === 'both');
 
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
-    orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
+    ...(usesFullText ? {} : { orderBy: args.orderBy === 'name' ? 'name' : args.orderBy }),
     fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
   });
 
@@ -2320,20 +2456,26 @@ try {
 }
 });
 
-async function exportViaWebUrl(fileId: string, mimeType: string): Promise<Buffer> {
-  const exportUrlMap: { [key: string]: string } = {
-    'application/vnd.google-apps.document':
-      `https://docs.google.com/document/d/${fileId}/export?format=docx`,
-    'application/vnd.google-apps.spreadsheet':
-      `https://docs.google.com/spreadsheets/d/${fileId}/export?format=xlsx`,
-    'application/vnd.google-apps.presentation':
-      `https://docs.google.com/presentation/d/${fileId}/export/pptx`,
-    'application/vnd.google-apps.drawing':
-      `https://docs.google.com/drawings/d/${fileId}/export?format=pdf`,
-  };
+async function exportViaWebUrl(fileId: string, mimeType: string, exportFormat?: string): Promise<Buffer> {
+  // Determine the web export format string from exportFormat or default
+  let webFormat: string | undefined;
+  if (exportFormat && exportFormat !== 'default') {
+    webFormat = exportFormat;
+  }
 
-  const url = exportUrlMap[mimeType];
-  if (!url) throw new UserError(`No web export URL for MIME type: ${mimeType}`);
+  let url: string;
+  if (mimeType === 'application/vnd.google-apps.document') {
+    url = `https://docs.google.com/document/d/${fileId}/export?format=${webFormat || 'docx'}`;
+  } else if (mimeType === 'application/vnd.google-apps.spreadsheet') {
+    url = `https://docs.google.com/spreadsheets/d/${fileId}/export?format=${webFormat || 'xlsx'}`;
+  } else if (mimeType === 'application/vnd.google-apps.presentation') {
+    const fmt = webFormat || 'pptx';
+    url = `https://docs.google.com/presentation/d/${fileId}/export/${fmt}`;
+  } else if (mimeType === 'application/vnd.google-apps.drawing') {
+    url = `https://docs.google.com/drawings/d/${fileId}/export?format=${webFormat || 'pdf'}`;
+  } else {
+    throw new UserError(`No web export URL for MIME type: ${mimeType}`);
+  }
 
   const tokenResponse = await authClient!.getAccessToken();
   const accessToken = tokenResponse.token;
@@ -2354,11 +2496,13 @@ async function exportViaWebUrl(fileId: string, mimeType: string): Promise<Buffer
 
 server.addTool({
 name: 'downloadFile',
-description: 'Downloads a file from Google Drive to the local filesystem. For Google Docs/Sheets/Slides (native Google formats), exports them to appropriate Office formats (docx, xlsx, pptx). For regular uploaded files (PDF, images, etc.), downloads them directly.',
+description: 'Downloads a file from Google Drive to the local filesystem. For Google Docs/Sheets/Slides (native Google formats), exports them to appropriate Office formats (docx, xlsx, pptx) by default. Use exportFormat to choose a different format like PDF. For regular uploaded files (PDF, images, etc.), downloads them directly.',
 parameters: z.object({
   fileId: z.string().describe('Google Drive file ID to download.'),
   savePath: z.string().describe('Absolute path to the local directory where the file should be saved.'),
   filename: z.string().optional().describe('Optional override for the filename. If not provided, uses the original file name from Drive.'),
+  exportFormat: z.enum(['default', 'pdf', 'docx', 'xlsx', 'csv', 'pptx', 'txt']).optional().default('default')
+    .describe('Export format for Google-native files. "default" uses docx/xlsx/pptx. For Google Docs: pdf, docx, txt. For Sheets: pdf, xlsx, csv. For Slides: pdf, pptx.'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
@@ -2387,7 +2531,7 @@ try {
   const fileMimeType = fileInfo.data.mimeType || '';
   const originalName = fileInfo.data.name || 'untitled';
 
-  // Map of Google native MIME types to export formats
+  // Map of Google native MIME types to default export formats
   const googleExportMap: { [key: string]: { mimeType: string; extension: string } } = {
     'application/vnd.google-apps.document': {
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -2407,13 +2551,42 @@ try {
     },
   };
 
+  // Format-to-MIME map for custom export formats
+  const formatMimeMap: { [key: string]: { mimeType: string; extension: string } } = {
+    pdf: { mimeType: 'application/pdf', extension: '.pdf' },
+    docx: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', extension: '.docx' },
+    xlsx: { mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extension: '.xlsx' },
+    csv: { mimeType: 'text/csv', extension: '.csv' },
+    pptx: { mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', extension: '.pptx' },
+    txt: { mimeType: 'text/plain', extension: '.txt' },
+  };
+
+  // Valid export formats per Google native type
+  const validFormats: { [key: string]: string[] } = {
+    'application/vnd.google-apps.document': ['pdf', 'docx', 'txt'],
+    'application/vnd.google-apps.spreadsheet': ['pdf', 'xlsx', 'csv'],
+    'application/vnd.google-apps.presentation': ['pdf', 'pptx'],
+    'application/vnd.google-apps.drawing': ['pdf'],
+  };
+
   const isGoogleNative = fileMimeType in googleExportMap;
   let finalFilename: string;
   let localFilePath: string;
 
   if (isGoogleNative) {
-    // For Google native formats, export to Office format
-    const exportConfig = googleExportMap[fileMimeType];
+    // Determine export config: use custom format or default
+    let exportConfig: { mimeType: string; extension: string };
+
+    if (args.exportFormat && args.exportFormat !== 'default') {
+      // Validate format is compatible with file type
+      const allowed = validFormats[fileMimeType];
+      if (allowed && !allowed.includes(args.exportFormat)) {
+        throw new UserError(`Format "${args.exportFormat}" is not valid for this file type. Valid formats: ${allowed.join(', ')}`);
+      }
+      exportConfig = formatMimeMap[args.exportFormat];
+    } else {
+      exportConfig = googleExportMap[fileMimeType];
+    }
 
     // Determine filename: use override or original name + appropriate extension
     if (args.filename) {
@@ -2443,7 +2616,7 @@ try {
       if (exportError.code === 403) {
         // File exceeds 10MB API export limit — fall back to web URL export
         log.info(`File too large for API export (>10MB), falling back to web URL export`);
-        buffer = await exportViaWebUrl(args.fileId, fileMimeType);
+        buffer = await exportViaWebUrl(args.fileId, fileMimeType, args.exportFormat);
       } else {
         throw exportError;
       }
@@ -2483,6 +2656,115 @@ try {
   if (error.code === 'EACCES') throw new UserError(`Permission denied writing to: ${args.savePath}. Check directory permissions.`);
   throw new UserError(`Failed to download file: ${error.message || 'Unknown error'}`);
 }
+}
+});
+
+// --- File Sharing Tools ---
+
+server.addTool({
+name: 'shareFile',
+description: 'Shares a Google Drive file with a specific user by email address.',
+parameters: z.object({
+  fileId: z.string().describe('Google Drive file ID to share.'),
+  email: z.string().email().describe('Email address to share with.'),
+  role: z.enum(['reader', 'commenter', 'writer']).describe('Permission level.'),
+  sendNotification: z.boolean().optional().default(true).describe('Send email notification to the recipient.'),
+  message: z.string().optional().describe('Optional message to include in the notification email.'),
+}),
+execute: async (args, { log }) => {
+  const drive = await getDriveClient();
+  log.info(`Sharing file ${args.fileId} with ${args.email} as ${args.role}`);
+  try {
+    await drive.permissions.create({
+      fileId: args.fileId,
+      requestBody: {
+        type: 'user',
+        role: args.role,
+        emailAddress: args.email,
+      },
+      sendNotificationEmail: args.sendNotification,
+      emailMessage: args.message,
+    });
+    return `Successfully shared file with ${args.email} (role: ${args.role}).`;
+  } catch (error: any) {
+    log.error(`Error sharing file: ${error.message || error}`);
+    if (error.code === 404) throw new UserError("File not found. Check the file ID.");
+    if (error.code === 403) throw new UserError("Permission denied. You may not have sharing rights for this file.");
+    throw new UserError(`Failed to share file: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'makeFilePublic',
+description: 'Makes a Google Drive file publicly accessible via link.',
+parameters: z.object({
+  fileId: z.string().describe('Google Drive file ID to make public.'),
+  role: z.enum(['reader', 'commenter']).optional().default('reader').describe('Public permission level.'),
+}),
+execute: async (args, { log }) => {
+  const drive = await getDriveClient();
+  log.info(`Making file ${args.fileId} public as ${args.role}`);
+  try {
+    await drive.permissions.create({
+      fileId: args.fileId,
+      requestBody: {
+        type: 'anyone',
+        role: args.role,
+      },
+    });
+    // Get the file's web view link
+    const fileInfo = await drive.files.get({
+      fileId: args.fileId,
+      fields: 'webViewLink',
+    });
+    return `File is now publicly accessible (role: ${args.role}).\nPublic link: ${fileInfo.data.webViewLink}`;
+  } catch (error: any) {
+    log.error(`Error making file public: ${error.message || error}`);
+    if (error.code === 404) throw new UserError("File not found. Check the file ID.");
+    if (error.code === 403) throw new UserError("Permission denied. You may not have sharing rights for this file.");
+    throw new UserError(`Failed to make file public: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'listFilePermissions',
+description: 'Lists all permissions (sharing settings) for a Google Drive file.',
+parameters: z.object({
+  fileId: z.string().describe('Google Drive file ID to check permissions for.'),
+}),
+execute: async (args, { log }) => {
+  const drive = await getDriveClient();
+  log.info(`Listing permissions for file ${args.fileId}`);
+  try {
+    const response = await drive.permissions.list({
+      fileId: args.fileId,
+      fields: 'permissions(id,type,role,emailAddress,displayName,domain)',
+    });
+    const permissions = response.data.permissions || [];
+    if (permissions.length === 0) {
+      return "No permissions found for this file.";
+    }
+    let result = `File has ${permissions.length} permission(s):\n\n`;
+    permissions.forEach((perm, index) => {
+      result += `${index + 1}. **${perm.role}** — `;
+      if (perm.type === 'anyone') {
+        result += 'Anyone with the link';
+      } else if (perm.type === 'domain') {
+        result += `Domain: ${perm.domain}`;
+      } else {
+        result += `${perm.displayName || 'Unknown'} (${perm.emailAddress || 'no email'})`;
+      }
+      result += ` [type: ${perm.type}]\n`;
+    });
+    return result;
+  } catch (error: any) {
+    log.error(`Error listing permissions: ${error.message || error}`);
+    if (error.code === 404) throw new UserError("File not found. Check the file ID.");
+    if (error.code === 403) throw new UserError("Permission denied. You may not have access to view permissions for this file.");
+    throw new UserError(`Failed to list permissions: ${error.message || 'Unknown error'}`);
+  }
 }
 });
 
@@ -2824,6 +3106,58 @@ execute: async (args, { log }) => {
     log.error(`Error adding sheet to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
     if (error instanceof UserError) throw error;
     throw new UserError(`Failed to add sheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'formatSpreadsheetCells',
+description: 'Formats cells in a Google Spreadsheet range (background color, text color, bold, italic, font size, alignment).',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The ID of the Google Spreadsheet.'),
+  range: z.string().describe('Cell range in A1 notation (e.g., "A1:B5" or "Sheet1!A1:C3").'),
+  backgroundColor: z.string().optional().describe('Background color as hex string (e.g., "#FF0000").'),
+  foregroundColor: z.string().optional().describe('Text color as hex string (e.g., "#000000").'),
+  bold: z.boolean().optional().describe('Whether to bold the text.'),
+  italic: z.boolean().optional().describe('Whether to italicize the text.'),
+  fontSize: z.number().optional().describe('Font size in points.'),
+  horizontalAlignment: z.enum(['LEFT', 'CENTER', 'RIGHT']).optional().describe('Horizontal text alignment.'),
+  verticalAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional().describe('Vertical text alignment.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Formatting cells ${args.range} in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const format: Parameters<typeof SheetsHelpers.formatCells>[3] = {};
+
+    if (args.backgroundColor) {
+      const rgb = SheetsHelpers.hexToRgb(args.backgroundColor);
+      if (!rgb) throw new UserError(`Invalid background color hex: ${args.backgroundColor}`);
+      format.backgroundColor = rgb;
+    }
+
+    const textFormat: NonNullable<typeof format.textFormat> = {};
+    let hasTextFormat = false;
+    if (args.foregroundColor) {
+      const rgb = SheetsHelpers.hexToRgb(args.foregroundColor);
+      if (!rgb) throw new UserError(`Invalid foreground color hex: ${args.foregroundColor}`);
+      textFormat.foregroundColor = rgb;
+      hasTextFormat = true;
+    }
+    if (args.bold !== undefined) { textFormat.bold = args.bold; hasTextFormat = true; }
+    if (args.italic !== undefined) { textFormat.italic = args.italic; hasTextFormat = true; }
+    if (args.fontSize !== undefined) { textFormat.fontSize = args.fontSize; hasTextFormat = true; }
+    if (hasTextFormat) format.textFormat = textFormat;
+
+    if (args.horizontalAlignment) format.horizontalAlignment = args.horizontalAlignment;
+    if (args.verticalAlignment) format.verticalAlignment = args.verticalAlignment;
+
+    await SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format);
+    return `Successfully formatted cells ${args.range}.`;
+  } catch (error: any) {
+    log.error(`Error formatting cells: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to format cells: ${error.message || 'Unknown error'}`);
   }
 }
 });
@@ -3344,6 +3678,61 @@ Example: To replace everything under "Block 2: Activities" with new content:
 
 // === GOOGLE SLIDES TOOLS ===
 
+// --- List/Search Tools ---
+
+server.addTool({
+  name: 'listGoogleSlides',
+  description: 'Lists Google Slides presentations from your Google Drive with optional filtering.',
+  parameters: z.object({
+    maxResults: z.number().int().min(1).max(100).optional().default(20).describe('Maximum number of presentations to return (1-100).'),
+    query: z.string().optional().describe('Search query to filter presentations by name.'),
+    orderBy: z.enum(['name', 'modifiedTime', 'createdTime']).optional().default('modifiedTime').describe('Sort order for results.'),
+  }),
+  execute: async (args, { log }) => {
+    const drive = await getDriveClient();
+    log.info(`Listing Google Slides. Query: ${args.query || 'none'}, Max: ${args.maxResults}, Order: ${args.orderBy}`);
+
+    try {
+      let queryString = "mimeType='application/vnd.google-apps.presentation' and trashed=false";
+      if (args.query) {
+        queryString += ` and name contains '${args.query}'`;
+      }
+
+      const response = await drive.files.list({
+        q: queryString,
+        pageSize: args.maxResults,
+        orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
+        fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+      });
+
+      const files = response.data.files || [];
+
+      if (files.length === 0) {
+        return "No Google Slides presentations found matching your criteria.";
+      }
+
+      let result = `Found ${files.length} Google Slides presentation(s):\n\n`;
+      files.forEach((file, index) => {
+        const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
+        const owner = file.owners?.[0]?.displayName || 'Unknown';
+        result += `${index + 1}. **${file.name}**\n`;
+        result += `   ID: ${file.id}\n`;
+        result += `   Modified: ${modifiedDate}\n`;
+        result += `   Owner: ${owner}\n`;
+        result += `   Link: ${file.webViewLink}\n\n`;
+      });
+
+      return result;
+    } catch (error: any) {
+      log.error(`Error listing Google Slides: ${error.message || error}`);
+      if (error.code === 403) {
+        throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
+      }
+      throw new UserError(`Failed to list presentations: ${error.message || 'Unknown error'}`);
+    }
+  }
+});
+
 // --- Read Tools ---
 
 server.addTool({
@@ -3380,12 +3769,40 @@ server.addTool({
       if (args.includeContent && presentation.slides) {
         result.slidesContent = presentation.slides.map((slide) => ({
           pageObjectId: slide.objectId,
-          elements: slide.pageElements?.map((el) => ({
-            objectId: el.objectId,
-            type: el.shape ? 'shape' : el.image ? 'image' : el.table ? 'table' : el.line ? 'line' : el.video ? 'video' : 'other',
-            shapeType: el.shape?.shapeType,
-            hasText: !!el.shape?.text?.textElements?.length,
-          })) || [],
+          elements: slide.pageElements?.map((el) => {
+            const element: any = {
+              objectId: el.objectId,
+              type: el.shape ? 'shape' : el.image ? 'image' : el.table ? 'table' : el.line ? 'line' : el.video ? 'video' : 'other',
+              shapeType: el.shape?.shapeType,
+            };
+
+            // Extract actual text content instead of just boolean
+            if (el.shape?.text?.textElements) {
+              element.text = el.shape.text.textElements
+                .filter((te: any) => te.textRun?.content)
+                .map((te: any) => te.textRun?.content)
+                .join('')
+                .trim() || null;
+            }
+
+            // Extract table text
+            if (el.table) {
+              element.rows = el.table.rows;
+              element.columns = el.table.columns;
+              element.tableContent = el.table.tableRows?.map((row: any) =>
+                row.tableCells?.map((cell: any) => {
+                  const texts = cell.text?.textElements
+                    ?.filter((te: any) => te.textRun?.content)
+                    .map((te: any) => te.textRun?.content)
+                    .join('')
+                    .trim();
+                  return texts || '';
+                }) ?? []
+              ) ?? [];
+            }
+
+            return element;
+          }) || [],
         }));
       }
 
@@ -5516,14 +5933,22 @@ try {
 await initializeGoogleClient(); // Authorize BEFORE starting listeners
 console.error("Starting Ultimate Google Docs, Sheets & Slides MCP server...");
 
-      // Using stdio as before
-      const configToUse = {
-          transportType: "stdio" as const,
-      };
+      // Transport is selectable via MCP_TRANSPORT env var.
+      //   MCP_TRANSPORT=httpStream  → HTTP streaming (for remote hosting)
+      //   unset / stdio            → stdio (default, spawned-by-client model)
+      // When httpStream: MCP_PORT (default 8787) controls the listen port.
+      const useHttp = process.env.MCP_TRANSPORT === 'httpStream';
+      const httpPort = Number(process.env.MCP_PORT || 8787);
+      const configToUse = useHttp
+        ? { transportType: 'httpStream' as const, httpStream: { port: httpPort } }
+        : { transportType: 'stdio' as const };
 
-      // Start the server with proper error handling
       server.start(configToUse);
-      console.error(`MCP Server running using ${configToUse.transportType}. Awaiting client connection...`);
+      if (useHttp) {
+        console.error(`MCP Server running on httpStream transport, port ${httpPort}. Endpoint: /mcp`);
+      } else {
+        console.error(`MCP Server running on stdio transport. Awaiting client connection...`);
+      }
 
       // Log that error handling has been enabled
       console.error('Process-level error handling configured to prevent crashes from timeout errors.');
