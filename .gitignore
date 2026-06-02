@@ -38,5 +38,8 @@ export-docs.mjs
 _bmad/
 _bmad-output/
 
+# Archived doc scan-report snapshots
+docs/.archive/
+
 # macOS
 .DS_Store 
