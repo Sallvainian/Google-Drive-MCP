@@ -308,6 +308,70 @@ export function extractHtmlContent(payload: gmail_v1.Schema$MessagePart): string
   return '';
 }
 
+// --- Convert HTML email bodies to readable plain text (dependency-free) ---
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ',
+  mdash: '—', ndash: '–', hellip: '…',
+  lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”',
+  trade: '™', reg: '®', copy: '©', deg: '°',
+  middot: '·', bull: '•', laquo: '«', raquo: '»',
+  euro: '€', pound: '£', cent: '¢', times: '×',
+};
+
+function codePointToString(cp: number): string {
+  if (!Number.isFinite(cp) || cp < 0 || cp > 0x10ffff) return '';
+  try {
+    return String.fromCodePoint(cp);
+  } catch {
+    return '';
+  }
+}
+
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => codePointToString(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_m, dec) => codePointToString(parseInt(dec, 10)))
+    .replace(/&([a-zA-Z][a-zA-Z0-9]*);/g, (m, name) =>
+      Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name] : m);
+}
+
+export function htmlToText(html: string): string {
+  if (!html) return '';
+  let text = html;
+
+  // Drop comments and non-content blocks entirely
+  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+  text = text.replace(/<(script|style|head|title|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
+
+  // Preserve hyperlinks as "label (url)" so product/order links survive
+  text = text.replace(/<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_m, href: string, inner: string) => {
+      const label = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const url = href.trim();
+      if (!/^https?:/i.test(url)) return label;
+      if (!label) return url;
+      return `${label} (${url})`;
+    });
+
+  // Turn block-level boundaries and breaks into newlines
+  text = text.replace(/<(?:br|hr)\s*\/?>/gi, '\n');
+  text = text.replace(/<\/(?:p|div|tr|li|ul|ol|table|thead|tbody|h[1-6]|blockquote|section|header|footer|article)>/gi, '\n');
+  text = text.replace(/<(?:p|div|tr|li|h[1-6]|blockquote|section|header|footer|article)\b[^>]*>/gi, '\n');
+  text = text.replace(/<td\b[^>]*>/gi, ' ');
+
+  // Strip any remaining tags
+  text = text.replace(/<[^>]+>/g, '');
+
+  // Decode entities, then normalize whitespace
+  text = decodeHtmlEntities(text);
+  text = text.replace(/ /g, ' ');
+  text = text.replace(/[ \t\f\v]+/g, ' ');
+  text = text.replace(/ *\n */g, '\n');
+  text = text.replace(/\n{3,}/g, '\n\n');
+
+  return text.trim();
+}
+
 // --- Extract Attachment Info ---
 export interface AttachmentInfo {
   attachmentId: string;
@@ -364,6 +428,17 @@ export function formatMessage(message: gmail_v1.Schema$Message): FormattedMessag
   const headers = parseEmailHeaders(message.payload?.headers || []);
   const labelIds = message.labelIds || [];
 
+  const plainText = extractPlainText(message.payload || {});
+  const htmlContent = extractHtmlContent(message.payload || {});
+  // Fall back to HTML-derived text when there is no usable plain-text part.
+  // Many transactional/marketing emails (TikTok Shop, Amazon, etc.) are HTML-only,
+  // which previously produced an empty body.
+  const MAX_BODY_LENGTH = 50000;
+  let body = (plainText && plainText.trim()) ? plainText : htmlToText(htmlContent);
+  if (body.length > MAX_BODY_LENGTH) {
+    body = body.slice(0, MAX_BODY_LENGTH) + '\n…[truncated]';
+  }
+
   return {
     id: message.id || '',
     threadId: message.threadId || '',
@@ -374,8 +449,8 @@ export function formatMessage(message: gmail_v1.Schema$Message): FormattedMessag
     cc: headers['cc'],
     subject: headers['subject'] || '(No Subject)',
     date: headers['date'] || '',
-    body: extractPlainText(message.payload || {}),
-    htmlBody: extractHtmlContent(message.payload || {}),
+    body,
+    htmlBody: htmlContent || undefined,
     attachments: extractAttachments(message.payload || {}),
     isUnread: labelIds.includes('UNREAD'),
     isStarred: labelIds.includes('STARRED'),
