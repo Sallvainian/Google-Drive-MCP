@@ -25,8 +25,18 @@ export-docs.mjs
 # Local workspace / session files
 .claude/
 .mcp.json
+.agents/
+.playwright/
+.playwright-cli/
 .playwright-mcp/
+
+# AI tool dotfiles
+.cursor/
+.codex/
+
+# BMad workspace output
 _bmad/
+_bmad-output/
 
 # macOS
 .DS_Store 
