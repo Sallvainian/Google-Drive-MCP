@@ -1,381 +1,245 @@
 # Architecture Overview
 
-## Project: Google Docs MCP Server
-
-**Version**: 1.0.0
-**Type**: Library (MCP Server)
-**Framework**: FastMCP 3.24.0
-**Language**: TypeScript
-**Generated**: 2026-02-19
+**Generated:** 2026-05-05 | **Scan Level:** Exhaustive
 
 ---
 
-## Executive Summary
+## System Design
 
-The Google Docs MCP Server is a Model Context Protocol (MCP) server that provides **99 tools** for interacting with Google Workspace APIs (Docs, Sheets, Slides, Drive, and Gmail). It enables AI assistants like Claude to programmatically read, write, format, and manage Google documents, spreadsheets, presentations, and email.
-
----
-
-## System Architecture
+Google-Drive-MCP follows a **monolith helper-per-domain** architecture. A single FastMCP server (`server.ts`) acts as the orchestration layer, registering all 108 tools. Each Google API domain has dedicated helper modules that encapsulate low-level API interactions.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        MCP Client                               │
-│              (Claude Desktop, VS Code, etc.)                    │
-└────────────────────────────┬────────────────────────────────────┘
-                             │ MCP Protocol (stdio)
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      FastMCP Server                             │
-│                     (src/server.ts)                             │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    92 Tool Handlers                      │   │
-│  │  ┌──────────┬──────────┬──────────┬──────────┬────────┐ │   │
-│  │  │  Docs    │  Sheets  │  Slides  │  Drive   │ Gmail  │ │   │
-│  │  │  (24)    │   (8)    │  (16)    │  (13)    │  (34)  │ │   │
-│  │  └──────────┴──────────┴──────────┴──────────┴────────┘ │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-         ┌───────────────────┼───────────────────┐
-         ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│    auth.ts      │ │  API Helpers    │ │    types.ts     │
-│  OAuth2/Service │ │                 │ │  Zod Schemas    │
-│  Account Auth   │ │ ┌─────────────┐ │ │  & Type Defs    │
-└─────────────────┘ │ │ Docs Helper │ │ └─────────────────┘
-                    │ │ Sheets Help │ │
-                    │ │ Slides Help │ │
-                    │ │ Gmail Help  │ │
-                    │ │ Label Mgr   │ │
-                    │ │ Filter Mgr  │ │
-                    │ └─────────────┘ │
-                    └────────┬────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Google APIs                                │
-│  ┌──────────┬──────────┬──────────┬──────────┬────────────┐    │
-│  │ Docs v1  │Sheets v4 │Slides v1 │ Drive v3 │  Gmail v1  │    │
-│  └──────────┴──────────┴──────────┴──────────┴────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
+                    MCP Client (Claude, VS Code, etc.)
+                              |
+                         MCP Protocol (stdio)
+                              |
+                    +---------v---------+
+                    |   FastMCP Server  |
+                    |   (server.ts)     |
+                    |   108 tool defs   |
+                    +---+---+---+---+---+
+                        |   |   |   |
+           +------------+   |   |   +------------+
+           |            |   |   |                |
+    +------v------+ +---v---v---+  +------v------+  +------v-------+
+    | Docs Helpers| |Sheets Help|  |Slides Helper|  | Gmail Helpers|
+    | (1,041 LOC) | | (427 LOC) |  | (619 LOC)   |  | (801 LOC)    |
+    +------+------+ +-----+-----+  +------+------+  +------+-------+
+           |               |               |                |
+           +-------+-------+-------+-------+         +------+------+
+                   |                                 | Label Mgr   |
+            +------v------+                          | (298 LOC)   |
+            |  types.ts   |                          +-------------+
+            | Zod Schemas |                          | Filter Mgr  |
+            | (386 LOC)   |                          | (320 LOC)   |
+            +------+------+                          +-------------+
+                   |
+            +------v------+
+            |   auth.ts   |
+            | OAuth2/JWT  |
+            | (372 LOC)   |
+            +-------------+
+                   |
+            Google APIs (googleapis ^148.0.0)
 ```
 
----
+## Module Breakdown
 
-## Component Breakdown
+### server.ts (6,015 LOC) -- Orchestration Layer
 
-### 1. Entry Points
+The largest file in the codebase (~58% of total source LOC). Responsibilities:
 
-| File | Purpose |
-|------|---------|
-| `index.js` | Node.js entry point, imports compiled `dist/server.js` |
-| `src/server.ts` | Main server implementation with all 99 tool definitions |
+- Creates a `FastMCP` instance with name "Ultimate Google Docs & Sheets MCP Server" (version 1.0.0)
+- Holds module-level singleton state for all 5 Google API clients (`googleDocs`, `googleDrive`, `googleSheets`, `googleSlides`, `googleGmail`) and the auth client
+- `initializeGoogleClient()` — lazy initialization called on first tool invocation; resets all clients to null on failure to allow retry
+- Per-domain getter helpers (`getDocsClient()`, `getDriveClient()`, `getSheetsClient()`, `getSlidesClient()`, `getGmailClient()`) that throw `UserError` if the client is not initialized
+- Registers all 108 tools with Zod parameter schemas and async `execute` handlers
+- Tools are grouped by API domain in source order: Docs (text/format/structure) → Comments → Drive → Sheets → Formatted Docs → Slides → Gmail
 
-### 2. Core Modules
+**Process-level resilience handlers (lines 107–154):**
 
-| Module | Lines | Responsibility |
-|--------|-------|----------------|
-| `server.ts` | 5,301 | Main server, 99 tool definitions, MCP protocol handling |
-| `auth.ts` | 226 | OAuth2 flow, service account JWT, token management |
-| `types.ts` | 386 | Zod schemas, TypeScript types, parameter validation |
+- `uncaughtException`: detects `EPIPE`/`EBADF` (broken stdio = parent process died) and exits cleanly with code 0 to avoid orphaning. Other errors are logged but do not crash the server.
+- `unhandledRejection`: same EPIPE/EBADF handling, plus a **rejection storm detector**:
+  - Constants: `REJECTION_LIMIT = 10`, `REJECTION_WINDOW_MS = 60_000`
+  - Tracks rejection count within a 60s sliding window
+  - On ≥10 rejections within 60s, exits with code 1 so the supervisor can restart with fresh state
+  - Otherwise logs full stack with counter context (`[N/10 in 60s]`) and continues
 
-### 3. API Helper Modules
+### auth.ts (372 LOC) -- Authentication Layer
 
-| Module | Lines | Responsibility |
-|--------|-------|----------------|
-| `googleDocsApiHelpers.ts` | 827 | Document operations, text ranges, batch updates, tabs |
-| `googleSheetsApiHelpers.ts` | 427 | A1 notation, range operations, cell formatting |
-| `googleSlidesApiHelpers.ts` | 595 | EMU conversion, element positioning, batch updates |
-| `googleGmailApiHelpers.ts` | 802 | Email MIME handling, attachments, threads, drafts |
-| `gmailLabelManager.ts` | 299 | Label CRUD, system labels, label resolution |
-| `gmailFilterManager.ts` | 321 | Filter CRUD, template-based filters |
+Authentication router supporting two methods, with an OAuth fallback chain:
 
-**Total:** 9,180 lines of TypeScript
+**Service Account flow** (`authorizeWithServiceAccount`):
+1. Read key file from `SERVICE_ACCOUNT_PATH`
+2. Create JWT client with all 5 scopes
+3. Optional impersonation via `GOOGLE_IMPERSONATE_USER` (domain-wide delegation)
 
----
+**OAuth 2.0 fallback chain** (`loadSavedCredentialsIfExist`):
+1. If `GOOGLE_REFRESH_TOKEN` env var set:
+   - Try refresh; on success, persist if Google rotated the token; verify required-account match
+   - On `invalid_grant`, `invalid_client`, `token has been expired`, or `token has been revoked` → fall through to file (don't trigger interactive OAuth for a stale env var)
+   - On non-recoverable error → throw
+2. If `token.json` exists:
+   - Same refresh + verify pattern
+   - Same recoverable-error fallthrough (return null → triggers interactive OAuth)
+3. Interactive OAuth (`authenticate`):
+   - Spin up local HTTP server on port 3000
+   - Open browser to consent URL with `prompt=consent`, `access_type=offline`
+   - Seeds `login_hint` from `REQUIRED_ACCOUNT_EMAIL` if set
+   - 5-minute timeout
+   - Calls `enforceRequiredAccount()` BEFORE persisting tokens (wrong-account auth never reaches disk)
 
-## Tool Catalog (92 Tools)
+**Token rotation:** `installTokenRefreshListener()` subscribes to `tokens` events on the OAuth2Client; whenever Google rotates the refresh token, the new one is written to disk via `saveCredentials()`.
 
-### Document Access & Editing (5 tools)
-| Tool | Description |
-|------|-------------|
-| `readGoogleDoc` | Read document content (text/json/markdown) |
-| `listDocumentTabs` | List all tabs in a document |
-| `appendToGoogleDoc` | Append text to document end |
-| `insertText` | Insert text at specific position |
-| `deleteRange` | Delete content in range |
+**Account enforcement:** `enforceRequiredAccount()` calls `drive.about.get({fields: 'user'})` and throws on email mismatch with `REQUIRED_ACCOUNT_EMAIL`. Used to pin per-instance accounts in multi-account setups (e.g., `Drive-MCP-Personal` vs `Drive-MCP-Work`).
 
-### Formatting & Styling (3 tools)
-| Tool | Description |
-|------|-------------|
-| `applyTextStyle` | Apply character formatting (bold, italic, colors) |
-| `applyParagraphStyle` | Apply paragraph formatting (alignment, spacing) |
-| `formatMatchingText` | Find and format specific text |
+**Path overrides:** `TOKEN_PATH` and `CREDENTIALS_PATH` env vars allow custom paths for multi-account setups.
 
-### Document Structure (7 tools)
-| Tool | Description |
-|------|-------------|
-| `insertTable` | Create a new table |
-| `editTableCell` | Edit table cell |
-| `insertPageBreak` | Insert page break |
-| `insertImageFromUrl` | Insert image from URL |
-| `insertLocalImage` | Upload and insert local image |
-| `fixListFormatting` | Auto-format lists *(EXPERIMENTAL)* |
-| `findElement` | Find elements *(NOT IMPLEMENTED)* |
-
-### Comment Management (6 tools)
-| Tool | Description |
-|------|-------------|
-| `listComments` | List all comments |
-| `getComment` | Get comment with replies |
-| `addComment` | Add comment to text range |
-| `replyToComment` | Reply to existing comment |
-| `resolveComment` | Mark comment as resolved |
-| `deleteComment` | Delete a comment |
-
-### Google Sheets (8 tools)
-| Tool | Description |
-|------|-------------|
-| `readSpreadsheet` | Read data from range |
-| `writeSpreadsheet` | Write data to range |
-| `appendSpreadsheetRows` | Append rows to sheet |
-| `clearSpreadsheetRange` | Clear values from range |
-| `getSpreadsheetInfo` | Get spreadsheet metadata |
-| `addSpreadsheetSheet` | Add new sheet/tab |
-| `createSpreadsheet` | Create new spreadsheet |
-| `listGoogleSheets` | List spreadsheets |
-
-### Google Drive (13 tools)
-| Tool | Description |
-|------|-------------|
-| `listGoogleDocs` | List documents |
-| `searchGoogleDocs` | Search documents |
-| `getRecentGoogleDocs` | Get recently modified docs |
-| `getDocumentInfo` | Get document metadata |
-| `createFolder` | Create new folder |
-| `listFolderContents` | List folder contents |
-| `listAllFolders` | Recursive folder listing |
-| `getFolderInfo` | Get folder metadata |
-| `moveFile` | Move file/folder |
-| `copyFile` | Copy file |
-| `renameFile` | Rename file/folder |
-| `deleteFile` | Delete file/folder |
-| `createDocument` | Create new document |
-
-### Enhanced Formatting (4 tools)
-| Tool | Description |
-|------|-------------|
-| `createFormattedDocument` | Create doc with structured formatting |
-| `insertFormattedContent` | Insert formatted content at index |
-| `replaceDocumentContent` | Replace entire document content |
-| `createFromTemplate` | Create document from template |
-
-### Google Slides (16 tools)
-| Tool | Description |
-|------|-------------|
-| `getPresentation` | Get presentation metadata and content |
-| `listSlides` | List all slides in presentation |
-| `getSlide` | Get detailed slide content |
-| `mapSlide` | Analyze slide dimensions and layout |
-| `createPresentation` | Create new presentation |
-| `addSlide` | Add new slide |
-| `duplicateSlide` | Duplicate existing slide |
-| `addTextBox` | Add text box with styling |
-| `addShape` | Add shape (rectangle, ellipse, etc.) |
-| `addImage` | Add image from URL |
-| `addTable` | Add table to slide |
-| `deleteSlide` | Delete a slide |
-| `deleteElement` | Delete element from slide |
-| `updateSpeakerNotes` | Update speaker notes |
-| `moveSlide` | Move slide to new position |
-| `insertTextInElement` | Insert/replace text in element |
-
-### Gmail (34 tools)
-
-#### Core Email Operations (7)
-| Tool | Description |
-|------|-------------|
-| `send_email` | Send email with attachments |
-| `draft_email` | Create draft with attachments |
-| `read_email` | Get message content, headers, attachments |
-| `search_emails` | Search with Gmail syntax |
-| `modify_email` | Add/remove labels |
-| `delete_email` | Permanently delete (irreversible) |
-| `download_attachment` | Save attachment to filesystem |
-
-#### Label Management (5)
-| Tool | Description |
-|------|-------------|
-| `list_email_labels` | Get all labels |
-| `create_label` | Create new label |
-| `update_label` | Rename or change visibility |
-| `delete_label` | Remove user label |
-| `get_or_create_label` | Idempotent label creation |
-
-#### Batch Operations (2)
-| Tool | Description |
-|------|-------------|
-| `batch_modify_emails` | Bulk label changes |
-| `batch_delete_emails` | Bulk permanent delete |
-
-#### Filter Management (5)
-| Tool | Description |
-|------|-------------|
-| `create_filter` | Create custom filter |
-| `list_filters` | Get all filters |
-| `get_filter` | Get filter details |
-| `delete_filter` | Remove filter |
-| `create_filter_from_template` | Template-based filter creation |
-
-#### Thread & Conversation (4)
-| Tool | Description |
-|------|-------------|
-| `get_thread` | Full conversation with all messages |
-| `list_threads` | Search/list threads |
-| `reply_to_email` | Reply maintaining thread |
-| `forward_email` | Forward to new recipients |
-
-#### Message Actions (5)
-| Tool | Description |
-|------|-------------|
-| `trash_email` | Move to trash (recoverable) |
-| `untrash_email` | Restore from trash |
-| `archive_email` | Remove from inbox only |
-| `mark_as_read` | Mark message read |
-| `mark_as_unread` | Mark message unread |
-
-#### Draft Management (5)
-| Tool | Description |
-|------|-------------|
-| `list_drafts` | Get all drafts |
-| `get_draft` | Get draft content |
-| `update_draft` | Modify draft |
-| `delete_draft` | Delete draft |
-| `send_draft` | Send existing draft |
-
-#### Profile (1)
-| Tool | Description |
-|------|-------------|
-| `get_user_profile` | Get authenticated email address |
-
----
-
-## Authentication Architecture
-
-### Method 1: OAuth2 (User Consent)
-
+**Auth precedence summary:**
 ```
-1. Server starts
-2. Checks for existing token.json
-3. If no token:
-   a. Load credentials.json
-   b. Start local HTTP server on port 3000
-   c. Generate OAuth URL
-   d. User visits URL, grants access
-   e. Callback receives authorization code
-   f. Token saved to token.json
-4. Initialize Google API clients with token
+authorize()
+  ├── SERVICE_ACCOUNT_PATH? → authorizeWithServiceAccount() → JWT
+  └── No service account:
+       ├── GOOGLE_REFRESH_TOKEN? → try refresh → ok? done | stale? fall through
+       ├── token.json?            → try refresh → ok? done | stale? null
+       └── No saved token         → authenticate() → interactive OAuth → save token
+  → enforceRequiredAccount() (if REQUIRED_ACCOUNT_EMAIL set)
 ```
 
-### Method 2: Service Account (Domain-Wide Delegation)
+### types.ts (386 LOC) -- Schema Definitions
 
-```
-Environment Variables:
-- SERVICE_ACCOUNT_PATH: Path to service account key file
-- GOOGLE_IMPERSONATE_USER: Email of user to impersonate
+Centralized Zod schemas organized by domain:
 
-1. Server starts
-2. Detects SERVICE_ACCOUNT_PATH
-3. Loads service account credentials
-4. Creates JWT client with impersonation
-5. Initialize Google API clients
-```
+- **Reusable fragments**: `DocumentIdParameter`, `RangeParameters`, `OptionalRangeParameters`, `TextFindParameter`
+- **Style schemas**: `TextStyleParameters`, `ParagraphStyleParameters` with type aliases (`TextStyleArgs`, `ParagraphStyleArgs`)
+- **Tool-level combinations**: `ApplyTextStyleToolParameters`, `ApplyParagraphStyleToolParameters` (use `z.union` for find-text-vs-range targeting)
+- **Slides schemas**: `PresentationIdParameter`, `PageObjectIdParameter`, `SlidePositionParameter`, `ElementSizeParameter`, `ElementPositionParameter`, `ShapeTypeEnum` (24 shape types), `PredefinedLayoutEnum` (11 layouts)
+- **Gmail schemas**: `MessageIdParameter`, `ThreadIdParameter`, `DraftIdParameter`, `LabelIdParameter`, `FilterIdParameter`, `EmailRecipientsParameter`, `EmailContentParameter`, `EmailAttachmentsParameter`, `EmailReplyParameter`, `GmailSearchParameter`, `LabelVisibilityParameter`, `CreateLabelParameter`, `UpdateLabelParameter`, `ModifyLabelsParameter`, `BatchModifyLabelsParameter`, `FilterCriteriaParameter`, `FilterActionParameter`, `CreateFilterParameter`, `FilterTemplateType` (6 templates), `FilterTemplateParameter`, `DownloadAttachmentParameter`, `BatchDeleteParameter`
+- **Combined Gmail schemas**: `SendEmailParameter`, `DraftEmailParameter` (built via `.merge()`)
 
-### Required OAuth Scopes
+Also exports:
+- `hexColorRegex`, `validateHexColor()`, `hexToRgbColor()` — color validation/conversion utilities
+- `NotImplementedError` class — for stub implementations
 
-```typescript
-const SCOPES = [
-  'https://www.googleapis.com/auth/documents',      // Docs read/write
-  'https://www.googleapis.com/auth/drive',          // Drive full access
-  'https://www.googleapis.com/auth/spreadsheets',   // Sheets read/write
-  'https://www.googleapis.com/auth/presentations',  // Slides read/write
-  'https://mail.google.com/',                       // Gmail full access
-];
-```
+### googleDocsApiHelpers.ts (1,041 LOC) -- Docs API
 
----
+Key capabilities:
+
+- **Batch updates**: `executeBatchUpdate()` with auto-chunking at 50 requests per call
+- **Text operations**: `findTextRange()` with multi-run support (text spanning multiple `textRun` elements), `getParagraphRange()` with table recursion
+- **Style builders**: `buildUpdateTextStyleRequest()`, `buildUpdateParagraphStyleRequest()` — construct Google Docs API request objects from simplified params
+- **Table operations**: `getTableCellRange()`, `findTableStartIndexByText()`, `findCellBelowHeader()` — navigate and manipulate table cells
+- **Image operations**: `insertInlineImage()`, `uploadImageToDrive()` — insert images from URL or local files
+- **Tab management**: `getAllTabs()`, `findTabById()`, `getTabTextLength()` — recursive tab navigation
+- **Section management**: `findSectionRange()` — find heading-bounded sections for content replacement
+- **Stubs**: `findParagraphsMatchingStyle()`, `detectAndFormatLists()`, `addCommentHelper()` — throw `NotImplementedError`
+
+### googleSheetsApiHelpers.ts (427 LOC) -- Sheets API
+
+Key capabilities:
+
+- **A1 notation**: `a1ToRowCol()`, `rowColToA1()`, `normalizeRange()` — bidirectional conversion
+- **Range CRUD**: `readRange()`, `writeRange()`, `appendValues()`, `clearRange()`
+- **Metadata**: `getSpreadsheetMetadata()` — get sheet info without grid data
+- **Sheet management**: `addSheet()` — create new tabs
+- **Formatting**: `formatCells()` — apply background color, text format, alignment via `repeatCell` request
+- **Color utility**: `hexToRgb()` (local copy)
+
+### googleSlidesApiHelpers.ts (619 LOC) -- Slides API
+
+Key capabilities:
+
+- **Unit conversion**: `emuFromPoints()`, `pointsFromEmu()` — EMU (English Metric Units) conversion (12,700 EMU per point)
+- **Object IDs**: `generateObjectId()` — timestamp + random format
+- **Batch updates**: `executeBatchUpdate()` with 50-request chunking
+- **Retrieval**: `getPresentation()`, `getSlide()`
+- **Element creation helpers**: `createTransform()`, `createSize()`, `createPageElementProperties()`
+- **Request builders**: `buildCreateSlideRequest()`, `buildCreateShapeRequest()`, `buildCreateImageRequest()`, `buildCreateTableRequest()`, `buildInsertTextRequest()`, `buildDeleteTextRequest()`, `buildUpdateSlidesPositionRequest()`, `buildUpdateShapePropertiesRequest()`, `buildUpdateTextStyleRequest()`
+- **Speaker notes**: `getSpeakerNotesShapeId()` — find notes shape in slide
+- **Local color utility**: `hexToRgbColor()`
+
+### googleGmailApiHelpers.ts (801 LOC) -- Gmail API
+
+Key capabilities:
+
+- **Email creation**: `createSimpleEmail()` (no attachments), `createEmailWithAttachments()` (multipart MIME with base64 attachment encoding)
+- **MIME handling**: `base64UrlEncode/Decode()`, `encodeEmailHeader()` (RFC 2047), `getMimeType()` (40+ extension mappings)
+- **Message parsing**: `parseEmailHeaders()`, `extractPlainText()`, `extractHtmlContent()`, `extractAttachments()`, `formatMessage()` — recursive multipart extraction
+- **Core operations**: `sendEmail()`, `createDraft()`, `getMessage()`, `searchMessages()`, `getThread()`, `listThreads()`
+- **Label operations**: `modifyMessageLabels()`, `batchModifyMessages()` (batch-size-aware)
+- **Delete operations**: `deleteMessage()`, `batchDeleteMessages()`, `trashMessage()`, `untrashMessage()`
+- **Attachments**: `downloadAttachment()` — download and save to filesystem
+- **Draft management**: `listDrafts()`, `getDraft()`, `updateDraft()`, `deleteDraft()`, `sendDraft()`
+- **Profile**: `getUserProfile()`
+
+### gmailLabelManager.ts (298 LOC) -- Gmail Label Management
+
+CRUD operations for Gmail labels:
+- System label awareness (`INBOX`, `SPAM`, `TRASH`, etc.)
+- Idempotent `getOrCreateLabel()`
+- `resolveLabelIds()` — resolve names or IDs to canonical IDs
+- Protection against modifying/deleting system labels
+
+### gmailFilterManager.ts (320 LOC) -- Gmail Filter Management
+
+CRUD operations for Gmail filters:
+- Template-based creation: `fromSender`, `withSubject`, `withAttachments`, `largeEmails`, `containingText`, `mailingList`
+- Validation that criteria and actions are non-empty
+- Display formatting utilities
 
 ## Data Flow
 
-### Read Operation
-```
-Client Request → FastMCP → getDocsClient() → Docs API → Parse Response → Format Output → Client
-```
+### Tool Invocation Flow
 
-### Write Operation
 ```
-Client Request → Validate Params (Zod) → Build Request → executeBatchUpdate → Docs API → Success Response
-```
-
-### Error Handling
-```
-API Error → Check Error Code → Map to UserError → Return Friendly Message
-- 400: Invalid request details
-- 404: "Document/Resource not found"
-- 403: "Permission denied"
-- Other: Original error message
+MCP Client → FastMCP (stdio) → Tool Handler (server.ts)
+  → initializeGoogleClient() [lazy, once per process]
+  → Zod validation (automatic via FastMCP)
+  → getXxxClient() helper
+  → Domain helper module (e.g., GDocsHelpers)
+  → Google API call (googleapis)
+  → Format response → Return string to client
 ```
 
----
+Tool return values are always strings — complex data is JSON-serialized or formatted as readable text.
 
-## Key Design Decisions
+### Authentication Flow at Startup
 
-### 1. Monolithic Server Architecture
-**Decision:** All 99 tools in a single server process.
-**Rationale:** Simplified deployment, shared authentication state, lower memory footprint.
+See **auth.ts** section above for the precedence chain. Key invariants:
+- Stale env-var refresh tokens fall through to file (don't trigger consent UI)
+- Wrong-account OAuth never reaches `token.json` (validation runs before persistence)
+- Token rotation is handled transparently via the `tokens` listener
 
-### 2. Zod Schema Validation
-**Decision:** Use Zod for all tool parameter validation.
-**Rationale:** Runtime type safety, automatic TypeScript inference, clear error messages.
+### Large File Export Path
 
-### 3. Helper Module Separation
-**Decision:** Separate helper modules per Google API.
-**Rationale:** Separation of concerns, testable units, reusable across tools.
+`downloadFile` for Google-native files (Docs/Sheets/Slides) calls `drive.files.export`. Drive's export API has a hard 10MB limit and returns 403 with a size-related message for larger files. The implementation catches this and falls back to `exportViaWebUrl()`, which uses Drive's no-limit web export URLs (returns the URL rather than the content).
 
-### 4. Dual Authentication Support
-**Decision:** Support both OAuth2 and Service Account.
-**Rationale:** OAuth2 for individual users, Service Account for enterprise deployment.
+## Testing Strategy
 
----
+- **Runner**: Node.js built-in (`node --test tests/`). NOT Jest, Vitest, or Mocha.
+- **Style**: Test files are JavaScript (`.test.js`), not TypeScript. They import from compiled `dist/` directory using `.js` extensions.
+- **Pre-condition**: Always `npm run build` before `npm test` — tests run against compiled output.
+- **Test files (3 files, 70 cases total):**
+  - `tests/types.test.js` (11 cases): Color validation (`validateHexColor`), hex-to-RGB conversion (`hexToRgbColor`)
+  - `tests/helpers.test.js` (14 cases): Text range finding across single/multi text runs, table cell range finding with edge cases (empty cells, out-of-bounds)
+  - `tests/slides.test.js` (45 cases): EMU conversion, object ID generation, request builders, batch update error handling (404, 403)
+- **Mocking**: `node:test`'s `mock.fn()` for Google API client mocking — no external mock libraries.
 
-## Known Limitations
+## CI/CD
 
-1. **Comment Anchoring**: Programmatically created comments appear in "All Comments" but aren't visibly anchored to text
-2. **Resolved Status**: Comment resolution may not persist in Google Docs UI
-3. **editTableCell**: May have edge cases with merged cells
-4. **findElement**: Not implemented
-5. **fixListFormatting**: Experimental, may not work reliably
-6. **First Gmail use**: After adding Gmail scope, delete existing tokens and re-authenticate
+GitHub Actions workflows under `.github/workflows/`:
+- `claude.yml`: Triggers on `@claude` mentions in issues/PRs/comments, runs Claude Code action
+- `claude-code-review.yml`: Automated code review workflow
 
----
+No build/test CI — tests are run locally before commits.
 
-## Dependencies
+## Configuration & Conventions
 
-### Runtime Dependencies
-| Package | Version | Purpose |
-|---------|---------|---------|
-| fastmcp | ^3.24.0 | MCP server framework |
-| googleapis | ^148.0.0 | Google API client |
-| google-auth-library | ^9.15.1 | OAuth2 and service account auth |
-| zod | ^3.24.2 | Schema validation |
-
----
-
-## Security Considerations
-
-1. **Credential Protection**: `credentials.json` and `token.json` must never be committed
-2. **Token Storage**: Tokens stored in plain text (consider keychain for production)
-3. **Scope Minimization**: Server requests only necessary OAuth scopes
-4. **Error Sanitization**: API errors sanitized before returning to client
-5. **Gmail Access**: Uses full Gmail scope for complete functionality
+- **Module system**: ESM only. `"type": "module"` in package.json. No `require()`, no `module.exports`.
+- **Imports**: Always use `.js` extension for relative imports — even for `.ts` files (NodeNext module resolution requirement).
+- **Logging**: All server output goes through `console.error()` since stdout is the MCP protocol transport. Using `console.log()` would corrupt the protocol stream.
+- **TypeScript strict mode**: Enabled (`strict: true`). Target ES2022, module NodeNext.
+- **No linter/formatter**: No ESLint or Prettier configured. Match surrounding code style when editing.
+- **Path resolution**: Use `fileURLToPath(import.meta.url)` and `path.dirname()` instead of `__dirname`/`__filename` (see `auth.ts` for the canonical pattern).
+- **Indices**: Google Docs content indices are 1-based. Slides element positions are in points (72 points = 1 inch; 1 point = 12,700 EMU).
+- **Batch update ordering**: For Docs, requests in a batch apply in reverse index order — when making multiple changes, process from end of document to beginning, or indices will shift.

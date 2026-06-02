@@ -1,115 +1,180 @@
 # Source Tree Analysis
 
-**Generated**: 2026-02-19
+**Generated:** 2026-05-05 | **Scan Level:** Exhaustive
+
+---
 
 ## Directory Structure
 
 ```
 Google-Drive-MCP/
-├── index.js                          # Entry point — imports dist/server.js
-├── package.json                      # npm manifest (fastmcp, googleapis, zod)
-├── tsconfig.json                     # TypeScript config (ES2022, NodeNext)
-├── credentials.json                  # Google OAuth client secrets (gitignored)
-├── token.json                        # OAuth refresh token (gitignored)
-├── .envrc                            # direnv environment variables
-├── .gitignore                        # Excludes credentials, dist, node_modules
+├── index.js                    # Entry point — imports dist/server.js
+├── package.json                # npm manifest (fastmcp, googleapis, zod)
+├── package-lock.json           # npm lockfile
+├── tsconfig.json               # TypeScript config (ES2022, NodeNext, strict)
+├── credentials.json            # Google OAuth client secrets (gitignored)
+├── token.json                  # Persisted OAuth refresh token (gitignored)
+├── export-docs.mjs             # Standalone script: export Google Docs as .docx
+├── .envrc                      # direnv: Google OAuth env vars
+├── .gitignore                  # Ignores node_modules, dist, token.json, .env
+├── .mcp.json                   # MCP client configuration
+├── README.md                   # Setup, scopes, usage examples
+├── claude.md                   # AI assistant quick reference
+├── SAMPLE_TASKS.md             # 15 example workflows
+├── vscode.md                   # VS Code MCP extension setup
 │
-├── src/                              # TypeScript source (9 files)
-│   ├── server.ts                     # ★ MAIN: FastMCP server, all 99 tool definitions
-│   ├── auth.ts                       # Authentication: OAuth2 + Service Account + token refresh
-│   ├── types.ts                      # Zod schemas, type exports, hex color utils
-│   ├── googleDocsApiHelpers.ts       # Docs: batch update, text search, style builders, tabs, images
-│   ├── googleSheetsApiHelpers.ts     # Sheets: A1 notation, range ops, cell formatting
-│   ├── googleSlidesApiHelpers.ts     # Slides: EMU conversion, element builders, batch update
-│   ├── googleGmailApiHelpers.ts      # Gmail: MIME construction, message parsing, all operations
-│   ├── gmailLabelManager.ts          # Gmail labels: CRUD, resolution, system labels
-│   ├── gmailFilterManager.ts         # Gmail filters: CRUD, template-based creation
-│   └── backup/                       # Backup copies (gitignored)
-│       ├── auth.ts.bak
-│       └── server.ts.bak
+├── src/                        # TypeScript source (9 files, 10,279 LOC)
+│   ├── server.ts               # [ENTRY] FastMCP server — all 108 tool definitions (6,015 LOC)
+│   ├── auth.ts                 # Authentication: OAuth2 + Service Account + account enforcement (372 LOC)
+│   ├── types.ts                # Zod schemas for all tool parameters (386 LOC)
+│   ├── googleDocsApiHelpers.ts # Docs API: batch update, text find, styles, tables, images, tabs (1,041 LOC)
+│   ├── googleSheetsApiHelpers.ts # Sheets API: A1 notation, range CRUD, formatting (427 LOC)
+│   ├── googleSlidesApiHelpers.ts # Slides API: EMU conversion, element builders, batch update (619 LOC)
+│   ├── googleGmailApiHelpers.ts  # Gmail API: email creation, MIME, search, threads, attachments (801 LOC)
+│   ├── gmailLabelManager.ts    # Gmail labels: CRUD, resolve IDs, system labels (298 LOC)
+│   ├── gmailFilterManager.ts   # Gmail filters: CRUD, template-based creation (320 LOC)
+│   └── backup/                 # Backup of older code (excluded from build)
 │
-├── dist/                             # Compiled JS output (gitignored)
-│   └── server.js                     # Compiled entry point
+├── dist/                       # Compiled JavaScript output (tsc) — gitignored
+│   ├── server.js               # Compiled entry point
+│   ├── auth.js
+│   ├── types.js
+│   ├── googleDocsApiHelpers.js
+│   ├── googleSheetsApiHelpers.js
+│   ├── googleSlidesApiHelpers.js
+│   ├── googleGmailApiHelpers.js
+│   ├── gmailLabelManager.js
+│   └── gmailFilterManager.js
 │
-├── tests/                            # Tests (Node.js built-in test runner)
-│   ├── types.test.js                 # Zod schema validation
-│   ├── slides.test.js                # Slides helper unit tests
-│   └── helpers.test.js               # Docs/Sheets helper tests
+├── tests/                      # Unit tests (node:test runner; ~70 cases)
+│   ├── types.test.js           # Color validation and hex-to-RGB conversion
+│   ├── helpers.test.js         # Text range finding and table cell range helpers
+│   └── slides.test.js          # EMU conversion, object ID gen, request builders, batch updates
 │
-├── pages/                            # GitHub Pages source (OAuth consent screen)
-│   ├── index.html                    # Landing page
-│   ├── privacy.html                  # Privacy policy
-│   ├── terms.html                    # Terms of service
-│   └── pages.md                      # Pages config notes
+├── docs/                       # Documentation + GitHub Pages
+│   ├── index.md                # Master documentation index
+│   ├── project-overview.md     # Executive summary, tech stack, tool categories
+│   ├── architecture.md         # Architecture documentation
+│   ├── source-tree-analysis.md # This file
+│   ├── development-guide.md    # Setup, commands, env vars, MCP client config
+│   ├── project-scan-report.json # Workflow state file
+│   ├── index.html              # GitHub Pages: OAuth app landing page
+│   ├── privacy.html            # GitHub Pages: Privacy policy
+│   ├── terms.html              # GitHub Pages: Terms of service
+│   ├── google25e86b582c5bc5ae.html # Google site verification token
+│   └── .archive/               # Archived workflow state files
 │
-├── docs/                             # Project documentation (this directory)
-│   ├── index.html                    # GitHub Pages landing (OAuth verification)
-│   ├── privacy.html                  # Privacy policy page
-│   ├── terms.html                    # Terms of service page
-│   ├── google25e86b582c5bc5ae.html   # Google site verification
-│   └── *.md                          # Generated documentation files
+├── pages/                      # Additional page templates
+├── assets/                     # Static assets
 │
-├── assets/                           # Static assets
-│   └── google.docs.mcp.1.gif         # Demo animation for README
+├── .github/workflows/          # CI/CD
+│   ├── claude.yml              # Claude Code action (issue/PR comment trigger)
+│   └── claude-code-review.yml  # Claude code review workflow
 │
-├── .github/
-│   └── workflows/
-│       ├── claude.yml                # Claude Code PR review action
-│       └── claude-code-review.yml    # Additional review workflow
-│
-├── README.md                         # Setup guide, feature list, usage
-├── CLAUDE.md                         # AI assistant quick reference
-├── SAMPLE_TASKS.md                   # 15 example workflows
-├── vscode.md                         # VS Code MCP extension guide
-├── LICENSE                           # ISC license
-└── export-docs.mjs                   # One-off utility (gitignored)
+├── .claude/                    # Claude Code configuration
+├── .agents/                    # Agent configurations
+├── .codex/, .cursor/           # Other editor/agent configs
+├── _bmad/                      # BMAD workflow system
+└── _bmad-output/               # BMAD workflow outputs
 ```
 
 ## Critical Files
 
-| File | Purpose | Why Critical |
-|------|---------|-------------|
-| `src/server.ts` | All 99 tool definitions | Core of the entire project — every MCP tool is registered here |
-| `src/auth.ts` | Authentication routing | Controls all Google API access — OAuth2, Service Account, token refresh |
-| `src/types.ts` | Zod schemas + types | Every tool parameter is validated through schemas defined here |
-| `index.js` | Node entry point | What MCP clients actually execute to start the server |
-| `credentials.json` | OAuth client secrets | Required for authentication (not in git) |
-| `token.json` | Saved OAuth token | Persists user authorization (not in git) |
+### Entry Points
 
-## Module Dependency Graph
+| File | Role |
+|------|------|
+| `index.js` | npm entry point, imports `dist/server.js` |
+| `src/server.ts` | Main source: FastMCP server with all 108 tool definitions |
+| `src/auth.ts` | Authentication router (OAuth2 vs Service Account) |
+
+### Core Source Files by Domain
+
+| File | LOC | Domain | Key Exports |
+|------|-----|--------|-------------|
+| `server.ts` | 6,015 | All | FastMCP server instance, 108 tool registrations, process-level error handlers (`uncaughtException`, `unhandledRejection` with rejection storm detection) |
+| `googleDocsApiHelpers.ts` | 1,041 | Docs | `executeBatchUpdate`, `findTextRange`, `getParagraphRange`, `getTableCellRange`, `findSectionRange`, `buildUpdateTextStyleRequest`, `buildUpdateParagraphStyleRequest`, `insertInlineImage`, `uploadImageToDrive`, `getAllTabs`, `findTabById` |
+| `googleGmailApiHelpers.ts` | 801 | Gmail | `createSimpleEmail`, `createEmailWithAttachments`, `sendEmail`, `createDraft`, `getMessage`, `searchMessages`, `getThread`, `listThreads`, `modifyMessageLabels`, `batchModifyMessages`, `deleteMessage`, `batchDeleteMessages`, `trashMessage`, `untrashMessage`, `downloadAttachment`, `getUserProfile`, `listDrafts`, `getDraft`, `updateDraft`, `deleteDraft`, `sendDraft`, `formatMessage`, `extractPlainText`, `extractHtmlContent`, `extractAttachments` |
+| `googleSlidesApiHelpers.ts` | 619 | Slides | `emuFromPoints`, `pointsFromEmu`, `generateObjectId`, `executeBatchUpdate`, `getPresentation`, `getSlide`, `createTransform`, `createSize`, `hexToRgbColor`, `buildCreateSlideRequest`, `buildCreateShapeRequest`, `buildCreateImageRequest`, `buildCreateTableRequest`, `buildInsertTextRequest`, `buildDeleteTextRequest`, `buildUpdateSlidesPositionRequest`, `buildUpdateShapePropertiesRequest`, `buildUpdateTextStyleRequest`, `getSpeakerNotesShapeId` |
+| `googleSheetsApiHelpers.ts` | 427 | Sheets | `a1ToRowCol`, `rowColToA1`, `normalizeRange`, `readRange`, `writeRange`, `appendValues`, `clearRange`, `getSpreadsheetMetadata`, `addSheet`, `formatCells`, `hexToRgb` |
+| `auth.ts` | 372 | Auth | `authorize` (main export), `authorizeWithServiceAccount`, `loadSavedCredentialsIfExist`, `authenticate`, `enforceRequiredAccount`, `saveCredentials`, `installTokenRefreshListener`, `isRecoverableAuthError` |
+| `types.ts` | 386 | Schemas | Zod schemas: `DocumentIdParameter`, `RangeParameters`, `TextStyleParameters`, `ParagraphStyleParameters`, `PresentationIdParameter`, `ShapeTypeEnum`, `PredefinedLayoutEnum`, `MessageIdParameter`, `GmailSearchParameter`, `SendEmailParameter`, `CreateFilterParameter`, `FilterTemplateParameter`, + ~30 more; `hexColorRegex`, `validateHexColor`, `hexToRgbColor`, `NotImplementedError` |
+| `gmailFilterManager.ts` | 320 | Gmail Filters | `listFilters`, `getFilter`, `createFilter`, `deleteFilter`, `createFilterFromTemplate`, `formatFilterForDisplay` |
+| `gmailLabelManager.ts` | 298 | Gmail Labels | `listLabels`, `getLabel`, `findLabelByName`, `createLabel`, `updateLabel`, `deleteLabel`, `getOrCreateLabel`, `resolveLabelIds`, `formatLabelsForDisplay` |
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `credentials.json` | Google OAuth client ID/secret (gitignored) |
+| `token.json` | Persisted OAuth refresh token (gitignored) |
+| `.envrc` | direnv config with Google OAuth env vars |
+| `.mcp.json` | MCP client configuration |
+| `tsconfig.json` | TypeScript compiler options (target ES2022, module NodeNext, strict) |
+
+## Dependency Graph
 
 ```
 index.js
   └── dist/server.js (compiled from src/server.ts)
         ├── src/auth.ts
-        │     └── googleapis, google-auth-library, fs, http
+        │     ├── googleapis (google.auth.OAuth2)
+        │     ├── google-auth-library (OAuth2Client, JWT)
+        │     └── fs/promises, http, url, child_process (stdlib)
         ├── src/types.ts
-        │     └── zod, googleapis (docs_v1 types only)
+        │     ├── zod (z)
+        │     └── googleapis (docs_v1 types only)
         ├── src/googleDocsApiHelpers.ts
-        │     └── googleapis, fastmcp (UserError), types.ts
+        │     ├── googleapis (docs_v1)
+        │     ├── google-auth-library
+        │     ├── fastmcp (UserError)
+        │     └── ./types.ts
         ├── src/googleSheetsApiHelpers.ts
-        │     └── googleapis, fastmcp (UserError)
+        │     ├── googleapis (sheets_v4)
+        │     └── fastmcp (UserError)
         ├── src/googleSlidesApiHelpers.ts
-        │     └── googleapis, fastmcp (UserError)
+        │     ├── googleapis (slides_v1)
+        │     └── fastmcp (UserError)
         ├── src/googleGmailApiHelpers.ts
-        │     └── googleapis, fastmcp (UserError), fs, path
+        │     ├── googleapis (gmail_v1)
+        │     ├── fastmcp (UserError)
+        │     └── fs/promises, path (stdlib)
         ├── src/gmailLabelManager.ts
-        │     └── googleapis, fastmcp (UserError)
+        │     ├── googleapis (gmail_v1)
+        │     └── fastmcp (UserError)
         └── src/gmailFilterManager.ts
-              └── googleapis, fastmcp (UserError), types.ts
+              ├── googleapis (gmail_v1)
+              ├── fastmcp (UserError)
+              └── ./types.ts (FilterCriteriaArgs, FilterActionArgs)
 ```
 
 ## Code Metrics
 
-| File | Approximate LOC | Exports |
-|------|----------------|---------|
-| server.ts | ~3,800 | 0 (side-effect: registers tools & starts server) |
-| auth.ts | ~310 | 1 (`authorize`) |
-| types.ts | ~387 | ~40 (schemas + types + utils) |
-| googleDocsApiHelpers.ts | ~936 | ~15 functions |
-| googleSheetsApiHelpers.ts | ~427 | ~10 functions |
-| googleSlidesApiHelpers.ts | ~595 | ~15 functions |
-| googleGmailApiHelpers.ts | ~802 | ~20 functions |
-| gmailLabelManager.ts | ~299 | ~10 functions |
-| gmailFilterManager.ts | ~321 | ~8 functions |
-| **Total** | **~7,877** | |
+| Metric | Value |
+|--------|-------|
+| Total source lines | 10,279 |
+| Source files | 9 |
+| Largest file | `server.ts` (6,015 LOC — 58.5% of codebase) |
+| Test files | 3 |
+| Test cases | ~70 (`types.test.js`: 11, `helpers.test.js`: 14, `slides.test.js`: 45) |
+| External dependencies | 4 (fastmcp, googleapis, google-auth-library, zod) |
+| Dev dependencies | 3 (typescript, tsx, @types/node) |
+| Tool count | 108 |
+| Google API scopes | 5 (documents, drive, spreadsheets, presentations, mail.google.com) |
+
+## File Locations Quick Reference
+
+| Looking for... | Go to... |
+|----------------|----------|
+| Tool definitions (parameters, descriptions, handlers) | `src/server.ts` |
+| Reusable Zod schemas | `src/types.ts` |
+| Auth flow, token rotation, account enforcement | `src/auth.ts` |
+| Docs batch update, text find, table helpers | `src/googleDocsApiHelpers.ts` |
+| Sheets A1 conversion, range CRUD | `src/googleSheetsApiHelpers.ts` |
+| Slides EMU conversion, request builders | `src/googleSlidesApiHelpers.ts` |
+| Gmail MIME encoding, message parsing | `src/googleGmailApiHelpers.ts` |
+| Gmail label operations | `src/gmailLabelManager.ts` |
+| Gmail filter templates | `src/gmailFilterManager.ts` |
+| OAuth scopes (5 scopes constant) | `src/auth.ts` line 20 |
+| Process error handler / rejection storm logic | `src/server.ts` lines 107–154 |
+| Lazy client initialization | `src/server.ts` `initializeGoogleClient()` |
