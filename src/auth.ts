@@ -82,6 +82,30 @@ function isRecoverableAuthError(msg: string): boolean {
   );
 }
 
+async function getAuthenticatedEmail(client: OAuth2Client | JWT): Promise<string> {
+  const drive = google.drive({ version: 'v3', auth: client as OAuth2Client });
+  const { data } = await drive.about.get({ fields: 'user' });
+  return data.user?.emailAddress ?? '(unknown)';
+}
+
+function accountMatchesRequired(email: string): boolean {
+  const required = process.env.REQUIRED_ACCOUNT_EMAIL;
+  if (!required) return true;
+  return email.toLowerCase() === required.toLowerCase();
+}
+
+async function isClientForRequiredAccount(client: OAuth2Client): Promise<boolean> {
+  if (!process.env.REQUIRED_ACCOUNT_EMAIL) return true;
+  const actual = await getAuthenticatedEmail(client);
+  if (!accountMatchesRequired(actual)) {
+    console.error(
+      `Saved credentials are for "${actual}" but REQUIRED_ACCOUNT_EMAIL="${process.env.REQUIRED_ACCOUNT_EMAIL}". Will re-authenticate.`
+    );
+    return false;
+  }
+  return true;
+}
+
 async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
   // Prefer GOOGLE_REFRESH_TOKEN env var over token.json file
   if (process.env.GOOGLE_REFRESH_TOKEN) {
@@ -95,6 +119,10 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
       if (credentials.refresh_token && credentials.refresh_token !== process.env.GOOGLE_REFRESH_TOKEN) {
         console.error('Refresh token was rotated during startup verification, saving...');
         await saveCredentials(client);
+      }
+      if (!(await isClientForRequiredAccount(client))) {
+        // Fall through to token file, then interactive OAuth (with login_hint pinning the right account)
+        return null;
       }
       return client;
     } catch (err: unknown) {
@@ -129,6 +157,10 @@ async function loadSavedCredentialsIfExist(): Promise<OAuth2Client | null> {
     if (refreshed.refresh_token && refreshed.refresh_token !== credentials.refresh_token) {
       console.error('Refresh token was rotated during startup verification, saving...');
       await saveCredentials(client);
+    }
+    if (!(await isClientForRequiredAccount(client))) {
+      // Treat wrong-account cached token as invalid so the interactive flow runs and overwrites it
+      return null;
     }
     return client;
   } catch (err: unknown) {
@@ -197,11 +229,16 @@ async function authenticate(): Promise<OAuth2Client> {
   const redirectUri = client_type === 'web' ? redirect_uris[0] : `http://localhost:${PORT}`;
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
 
-  const authorizeUrl = oAuth2Client.generateAuthUrl({
+  const authUrlOptions: Parameters<typeof oAuth2Client.generateAuthUrl>[0] = {
     access_type: 'offline',
     scope: SCOPES.join(' '),
     prompt: 'consent', // Force consent screen to ensure we get refresh_token
-  });
+  };
+  if (process.env.REQUIRED_ACCOUNT_EMAIL) {
+    // Pre-select the required account in Google's picker so the wrong-account pathway is closed off
+    authUrlOptions.login_hint = process.env.REQUIRED_ACCOUNT_EMAIL;
+  }
+  const authorizeUrl = oAuth2Client.generateAuthUrl(authUrlOptions);
 
   console.error('\n=== Google OAuth Authentication ===');
   console.error('Opening browser for authentication...');
@@ -273,6 +310,8 @@ async function authenticate(): Promise<OAuth2Client> {
       const { tokens } = await oAuth2Client.getToken(code);
       oAuth2Client.setCredentials(tokens);
       installTokenRefreshListener(oAuth2Client);
+      // Validate before persisting so a wrong-account OAuth never reaches disk
+      await enforceRequiredAccount(oAuth2Client);
       if (tokens.refresh_token) {
         await saveCredentials(oAuth2Client);
       } else {
@@ -282,7 +321,7 @@ async function authenticate(): Promise<OAuth2Client> {
       return oAuth2Client;
     } catch (err) {
       console.error('Error retrieving access token', err);
-      throw new Error('Authentication failed');
+      throw new Error(`Authentication failed: ${(err as Error).message}`);
     }
   } else {
     // For web clients, the redirect will happen externally
@@ -294,14 +333,11 @@ async function enforceRequiredAccount(client: OAuth2Client | JWT): Promise<void>
   const required = process.env.REQUIRED_ACCOUNT_EMAIL;
   if (!required) return;
 
-  const drive = google.drive({ version: 'v3', auth: client as OAuth2Client });
-  const { data } = await drive.about.get({ fields: 'user' });
-  const actual = data.user?.emailAddress ?? '(unknown)';
-
-  if (actual.toLowerCase() !== required.toLowerCase()) {
+  const actual = await getAuthenticatedEmail(client);
+  if (!accountMatchesRequired(actual)) {
     throw new Error(
       `Account mismatch: expected "${required}" but authenticated as "${actual}". ` +
-      `Delete the token file at ${TOKEN_PATH} and re-authenticate with the correct account.`
+      `Re-run authentication and pick "${required}" in Google's account picker.`
     );
   }
   console.error(`Account verified: ${actual}`);

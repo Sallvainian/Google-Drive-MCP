@@ -11,16 +11,40 @@ const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[]): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
-if (!requests || requests.length === 0) {
-// console.warn("executeBatchUpdate called with no requests.");
-return {}; // Nothing to do
-}
+  if (!requests || requests.length === 0) {
+    return {}; // Nothing to do
+  }
 
-    // TODO: Consider splitting large request arrays into multiple batches if needed
-    if (requests.length > MAX_BATCH_UPDATE_REQUESTS) {
-         console.warn(`Attempting batch update with ${requests.length} requests, exceeding typical limits. May fail.`);
+  // Split into chunks of MAX_BATCH_UPDATE_REQUESTS and execute sequentially
+  // (order matters — document indices shift between batches)
+  if (requests.length > MAX_BATCH_UPDATE_REQUESTS) {
+    console.log(`Splitting ${requests.length} requests into batches of ${MAX_BATCH_UPDATE_REQUESTS}`);
+    let combinedResponse: docs_v1.Schema$BatchUpdateDocumentResponse = {};
+
+    for (let i = 0; i < requests.length; i += MAX_BATCH_UPDATE_REQUESTS) {
+      const chunk = requests.slice(i, i + MAX_BATCH_UPDATE_REQUESTS);
+      console.log(`Executing batch ${Math.floor(i / MAX_BATCH_UPDATE_REQUESTS) + 1} (${chunk.length} requests)`);
+      const response = await executeSingleBatch(docs, documentId, chunk);
+      // Merge replies
+      if (response.replies) {
+        combinedResponse.replies = [...(combinedResponse.replies || []), ...response.replies];
+      }
+      combinedResponse.documentId = response.documentId;
+      combinedResponse.writeControl = response.writeControl;
     }
 
+    return combinedResponse;
+  }
+
+  return executeSingleBatch(docs, documentId, requests);
+}
+
+// Internal: execute a single batch (guaranteed <= MAX_BATCH_UPDATE_REQUESTS)
+async function executeSingleBatch(
+  docs: Docs,
+  documentId: string,
+  requests: docs_v1.Schema$Request[]
+): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
     try {
         const response = await docs.documents.batchUpdate({
             documentId: documentId,
@@ -31,20 +55,17 @@ return {}; // Nothing to do
         console.error(`Google API batchUpdate Error for doc ${documentId}:`, error.response?.data || error.message);
         // Translate common API errors to UserErrors
         if (error.code === 400 && error.message.includes('Invalid requests')) {
-             // Try to extract more specific info if available
              const details = error.response?.data?.error?.details;
              let detailMsg = '';
              if (details && Array.isArray(details)) {
-                 detailMsg = details.map(d => d.description || JSON.stringify(d)).join('; ');
+                 detailMsg = details.map((d: any) => d.description || JSON.stringify(d)).join('; ');
              }
             throw new UserError(`Invalid request sent to Google Docs API. Details: ${detailMsg || error.message}`);
         }
         if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}). Check the ID.`);
         if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
-        // Generic internal error for others
         throw new Error(`Google API Error (${error.code}): ${error.message}`);
     }
-
 }
 
 // --- Text Finding Helper ---
@@ -500,6 +521,91 @@ export async function getTableCellRange(
         if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
         throw new Error(`Failed to get table cell range: ${error.message || 'Unknown error'}`);
     }
+}
+
+/**
+ * Finds the startIndex of the first table whose cells contain the given search text.
+ * @param docs - Google Docs API client
+ * @param documentId - The document ID
+ * @param searchText - Text to search for in any table cell
+ * @returns The startIndex of the matching table, or null if not found
+ */
+export async function findTableStartIndexByText(
+    docs: Docs,
+    documentId: string,
+    searchText: string
+): Promise<number | null> {
+    const res = await docs.documents.get({
+        documentId,
+        fields: 'body(content(startIndex,endIndex,table(tableRows(tableCells(content(paragraph(elements(textRun(content)))))))))',
+    });
+
+    if (!res.data.body?.content) return null;
+
+    const lower = searchText.toLowerCase();
+    for (const element of res.data.body.content) {
+        if (!element.table || element.startIndex === undefined) continue;
+        for (const row of element.table.tableRows || []) {
+            for (const cell of row.tableCells || []) {
+                let cellText = '';
+                for (const para of cell.content || []) {
+                    for (const el of para.paragraph?.elements || []) {
+                        cellText += el.textRun?.content || '';
+                    }
+                }
+                if (cellText.toLowerCase().includes(lower)) {
+                    return element.startIndex;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Finds the cell BELOW a header cell matching the given text.
+ * Returns the table's startIndex plus the row/column of the content cell (one row below the header).
+ */
+export async function findCellBelowHeader(
+    docs: Docs,
+    documentId: string,
+    headerText: string
+): Promise<{ tableStartIndex: number; rowIndex: number; columnIndex: number } | null> {
+    const res = await docs.documents.get({
+        documentId,
+        fields: 'body(content(startIndex,endIndex,table(tableRows(tableCells(content(paragraph(elements(textRun(content)))))))))',
+    });
+
+    if (!res.data.body?.content) return null;
+
+    const lower = headerText.toLowerCase();
+    for (const element of res.data.body.content) {
+        if (!element.table || element.startIndex === undefined) continue;
+        const rows = element.table.tableRows || [];
+        for (let r = 0; r < rows.length; r++) {
+            const cells = rows[r].tableCells || [];
+            for (let c = 0; c < cells.length; c++) {
+                let cellText = '';
+                for (const para of cells[c].content || []) {
+                    for (const el of para.paragraph?.elements || []) {
+                        cellText += el.textRun?.content || '';
+                    }
+                }
+                if (cellText.toLowerCase().includes(lower)) {
+                    // Return the cell one row below (same column)
+                    const targetRow = r + 1;
+                    if (targetRow < rows.length) {
+                        return {
+                            tableStartIndex: element.startIndex as number,
+                            rowIndex: targetRow,
+                            columnIndex: c,
+                        };
+                    }
+                }
+            }
+        }
+    }
+    return null;
 }
 
 // --- Specific Feature Helpers ---

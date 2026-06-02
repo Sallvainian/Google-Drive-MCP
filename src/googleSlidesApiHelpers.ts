@@ -61,10 +61,35 @@ export async function executeBatchUpdate(
     return {};
   }
 
+  // Split into chunks of MAX_BATCH_UPDATE_REQUESTS and execute sequentially
+  // (order matters — element indices/IDs may shift between batches)
   if (requests.length > MAX_BATCH_UPDATE_REQUESTS) {
-    console.warn(`Attempting batch update with ${requests.length} requests, exceeding typical limits. May fail.`);
+    console.log(`Splitting ${requests.length} Slides requests into batches of ${MAX_BATCH_UPDATE_REQUESTS}`);
+    let combinedResponse: slides_v1.Schema$BatchUpdatePresentationResponse = {};
+
+    for (let i = 0; i < requests.length; i += MAX_BATCH_UPDATE_REQUESTS) {
+      const chunk = requests.slice(i, i + MAX_BATCH_UPDATE_REQUESTS);
+      console.log(`Executing Slides batch ${Math.floor(i / MAX_BATCH_UPDATE_REQUESTS) + 1} (${chunk.length} requests)`);
+      const response = await executeSingleSlidesBatch(slides, presentationId, chunk);
+      if (response.replies) {
+        combinedResponse.replies = [...(combinedResponse.replies || []), ...response.replies];
+      }
+      combinedResponse.presentationId = response.presentationId;
+      combinedResponse.writeControl = response.writeControl;
+    }
+
+    return combinedResponse;
   }
 
+  return executeSingleSlidesBatch(slides, presentationId, requests);
+}
+
+// Internal: execute a single batch (guaranteed <= MAX_BATCH_UPDATE_REQUESTS)
+async function executeSingleSlidesBatch(
+  slides: Slides,
+  presentationId: string,
+  requests: slides_v1.Schema$Request[]
+): Promise<slides_v1.Schema$BatchUpdatePresentationResponse> {
   try {
     const response = await slides.presentations.batchUpdate({
       presentationId: presentationId,

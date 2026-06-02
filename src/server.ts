@@ -105,15 +105,52 @@ return { authClient, googleDocs, googleDrive, googleSheets, googleSlides, google
 }
 
 // Set up process-level unhandled error/rejection handlers to prevent crashes
-process.on('uncaughtException', (error) => {
+process.on('uncaughtException', (error: NodeJS.ErrnoException) => {
+  // Broken stdio pipe = parent died; nothing recoverable, exit cleanly so we don't orphan
+  if (error.code === 'EPIPE' || error.code === 'EBADF') {
+    console.error('Fatal stdio error, exiting:', error.code);
+    process.exit(0);
+  }
   console.error('Uncaught Exception:', error);
-  // Don't exit process, just log the error and continue
-  // This will catch timeout errors that might otherwise crash the server
+  // Don't exit on transient errors (timeouts mid-tool-call) — keep server alive
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Promise Rejection:', reason);
-  // Don't exit process, just log the error and continue
+// Unhandled-rejection policy:
+//   1. Broken stdio (EPIPE/EBADF) = parent dead → exit (parity with uncaughtException).
+//   2. Rejection storm (>=10 in 60s) = systemic failure → exit so supervisor restarts with fresh state.
+//   3. Otherwise log the full stack + counter context and continue (keeps the safety net for
+//      transient googleapis hiccups during tool calls without silently masking real bugs).
+const REJECTION_LIMIT = 10;
+const REJECTION_WINDOW_MS = 60_000;
+let rejectionCount = 0;
+let rejectionWindowStart = Date.now();
+
+process.on('unhandledRejection', (reason: unknown) => {
+  const code = (reason as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EPIPE' || code === 'EBADF') {
+    console.error('Fatal stdio error in promise rejection, exiting:', code);
+    process.exit(0);
+  }
+
+  const now = Date.now();
+  if (now - rejectionWindowStart > REJECTION_WINDOW_MS) {
+    rejectionCount = 0;
+    rejectionWindowStart = now;
+  }
+  rejectionCount++;
+
+  const detail = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason);
+  console.error(
+    `Unhandled Promise Rejection [${rejectionCount}/${REJECTION_LIMIT} in ${REJECTION_WINDOW_MS / 1000}s]:`,
+    detail
+  );
+
+  if (rejectionCount >= REJECTION_LIMIT) {
+    console.error(
+      `FATAL: ${REJECTION_LIMIT} unhandled rejections within ${REJECTION_WINDOW_MS / 1000}s — exiting for clean restart`
+    );
+    process.exit(1);
+  }
 });
 
 const server = new FastMCP({
@@ -5948,7 +5985,23 @@ console.error("Starting Ultimate Google Docs, Sheets & Slides MCP server...");
         console.error(`MCP Server running on httpStream transport, port ${httpPort}. Endpoint: /mcp`);
       } else {
         console.error(`MCP Server running on stdio transport. Awaiting client connection...`);
+
+        // Parent (Claude Code) closed the stdio pipe → no client left, exit cleanly.
+        // Without this, orphaned servers stay alive forever after the parent dies.
+        process.stdin.on('end', () => {
+          console.error('stdin closed (parent disconnected) — exiting');
+          process.exit(0);
+        });
+        process.stdin.on('error', (err: NodeJS.ErrnoException) => {
+          console.error('stdin error — exiting:', err.code || err.message);
+          process.exit(0);
+        });
       }
+
+      // Honor explicit termination signals on both transports
+      process.on('SIGTERM', () => process.exit(0));
+      process.on('SIGHUP', () => process.exit(0));
+      process.on('SIGINT', () => process.exit(0));
 
       // Log that error handling has been enabled
       console.error('Process-level error handling configured to prevent crashes from timeout errors.');
