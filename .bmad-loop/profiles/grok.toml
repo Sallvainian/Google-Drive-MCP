@@ -1,0 +1,37 @@
+# xAI Grok CLI (>= 1.0.30). Grok's hook files use the same JSON `hooks` object
+# as Claude Code (verified against ~/.grok/hooks/vibe-island.json), and its hook
+# payload carries session_id / transcript_path / hook_event_name — the three
+# fields .bmad-loop/bmad_loop_hook.py reads — so the claude-settings-json
+# dialect applies unchanged, pointed at Grok's project hook directory.
+#
+# Skill discovery does NOT include <repo>/.claude/skills — Grok scans
+# ./.grok/skills, <repo_root>/.grok/skills, ~/.grok/skills and ~/.claude/skills
+# only — hence skill_tree = ".grok/skills". Repo-scoped skills are filtered out
+# when gitignored, so .grok/ must stay tracked. The bmad-* skills there are
+# COPIES of .claude/skills/* (not symlinks: bmad-loop runs sessions in git
+# worktree checkouts where gitignored .claude/ is absent, so links would
+# dangle). They therefore go stale on a BMAD upgrade — re-copy after running
+# `npx bmad-method install`.
+#
+# No usage parser exists for Grok's transcript format, so usage_parser = "none":
+# token budgeting (limits.max_tokens_per_session) is inert for Grok stages.
+name = "grok"
+binary = "grok"
+prompt_template = "Use the ${skill} skill now, and use subagents as needed: {args}"
+bypass_args = ["--always-approve"]
+model_flag = "--model"
+usage_parser = "none"
+skill_tree = ".grok/skills"
+first_run_note = "run `grok` once in the project and run /hooks-trust to trust project hooks (untrusted hooks never execute)"
+
+# .grok/skills is untracked (matching this repo's convention of not tracking
+# .claude/ , .agents/ and _bmad/), so a `git worktree add` checkout omits it.
+# seed_files copies the tree in from the main repo, which is what lets an
+# isolated review session still resolve bmad-build-auto. Directories are
+# supported (worktree_flow.py walks them recursively).
+seed_files = [".grok/skills"]
+
+[hooks]
+dialect = "claude-settings-json"
+config_path = ".grok/hooks/bmad-loop.json"
+events = { SessionStart = "SessionStart", Stop = "Stop", SessionEnd = "SessionEnd", PreCompact = "PreCompact" }
