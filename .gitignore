@@ -23,8 +23,14 @@ repomix-output*
 export-docs.mjs
 
 # Local workspace / session files
-.claude/
 .mcp.json
+
+# .claude/ is TRACKED (config, hooks, skills, personalities).
+# Only the disposable/large caches under it are ignored:
+.claude/audio/
+.claude/.agentvibes-backup/
+.claude/**/.DS_Store
+.claude/*.bak-*
 .agents/
 .playwright/
 .playwright-cli/
@@ -43,3 +49,13 @@ docs/.archive/
 
 # macOS
 .DS_Store 
+.bmad-loop/runs/
+.bmad-loop/cache/
+.bmad-loop/policy.toml
+_bmad/render/
+
+# Grok CLI (bmad-loop review adapter) — MUST stay tracked.
+# Grok filters repo-scoped skills that are gitignored, and bmad-loop runs
+# sessions in `git worktree` checkouts, so .grok/skills must be real tracked
+# files for the review stage to find bmad-build-auto. Do not ignore .grok/.
+!.grok/
