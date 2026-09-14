@@ -54,8 +54,10 @@ docs/.archive/
 .bmad-loop/policy.toml
 _bmad/render/
 
-# Grok CLI (bmad-loop review adapter) — MUST stay tracked.
-# Grok filters repo-scoped skills that are gitignored, and bmad-loop runs
-# sessions in `git worktree` checkouts, so .grok/skills must be real tracked
-# files for the review stage to find bmad-build-auto. Do not ignore .grok/.
-!.grok/
+# Grok CLI (bmad-loop review adapter) — local tooling, not tracked.
+# Tested on grok 1.0.30: Grok discovers repo-scoped skills regardless of
+# gitignore state, so this tree does not need tracking (README.md:1589
+# claims otherwise; the shipped binary does not behave that way).
+# Worktree checkouts get the tree via seed_files in
+# .bmad-loop/profiles/grok.toml, not via git.
+.grok/
