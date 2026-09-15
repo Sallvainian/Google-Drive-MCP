@@ -31,6 +31,10 @@ export-docs.mjs
 .claude/.agentvibes-backup/
 .claude/**/.DS_Store
 .claude/*.bak-*
+# Symlink into the BMAD-Custom repo, where this skill lives and has its own
+# history. Tracking it would store an absolute path that only resolves on one
+# machine — see .bmad-loop/profiles/grok.toml on why links dangle here.
+.claude/skills/loop-monitoring
 .agents/
 .playwright/
 .playwright-cli/
