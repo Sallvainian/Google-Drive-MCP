@@ -100,7 +100,7 @@ async function isClientForRequiredAccount(client: OAuth2Client): Promise<boolean
   const actual = await getAuthenticatedEmail(client);
   if (!accountMatchesRequired(actual)) {
     console.error(
-      `Saved credentials are for "${actual}" but REQUIRED_ACCOUNT_EMAIL="${process.env.REQUIRED_ACCOUNT_EMAIL}". Will re-authenticate.`
+      `Saved credentials are for "${actual}" but do not match REQUIRED_ACCOUNT_EMAIL. Will re-authenticate.`
     );
     return false;
   }
@@ -377,7 +377,7 @@ async function authenticate(): Promise<OAuth2Client> {
       console.error('Authentication successful!');
       return oAuth2Client;
     } catch (err) {
-      console.error('Error retrieving access token', err);
+      console.error('Error retrieving access token');
       throw new Error(`Authentication failed: ${(err as Error).message}`);
     }
   } else {

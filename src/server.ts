@@ -69,7 +69,7 @@ googleSlides = google.slides({ version: 'v1', auth: authClient });
 googleGmail = google.gmail({ version: 'v1', auth: authClient });
 console.error("Google API client authorized successfully.");
 } catch (error) {
-console.error("FATAL: Failed to initialize Google API client:", error);
+console.error("FATAL: Failed to initialize Google API client.");
 authClient = null; // Reset on failure
 googleDocs = null;
 googleDrive = null;

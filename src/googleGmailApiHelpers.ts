@@ -441,18 +441,32 @@ function decodeHtmlEntities(str: string): string {
       Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name] : m);
 }
 
+function replaceUntilStable(input: string, pattern: RegExp, replacement: string): string {
+  let previous: string;
+  do {
+    previous = input;
+    pattern.lastIndex = 0;
+    input = input.replace(pattern, replacement);
+  } while (input !== previous);
+  return input;
+}
+
 export function htmlToText(html: string): string {
   if (!html) return '';
   let text = html;
+  let previous: string;
 
-  // Drop comments and non-content blocks entirely
-  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
-  text = text.replace(/<(script|style|head|title|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
+  // Drop comments and non-content blocks until nested wrappers stop reappearing
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+    text = text.replace(/<(script|style|head|title|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
+  } while (text !== previous);
 
   // Preserve hyperlinks as "label (url)" so product/order links survive
   text = text.replace(/<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
     (_m, href: string, inner: string) => {
-      const label = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const label = replaceUntilStable(inner, /<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const url = href.trim();
       if (!/^https?:/i.test(url)) return label;
       if (!label) return url;
@@ -465,11 +479,12 @@ export function htmlToText(html: string): string {
   text = text.replace(/<(?:p|div|tr|li|h[1-6]|blockquote|section|header|footer|article)\b[^>]*>/gi, '\n');
   text = text.replace(/<td\b[^>]*>/gi, ' ');
 
-  // Strip any remaining tags
-  text = text.replace(/<[^>]+>/g, '');
-
-  // Decode entities, then normalize whitespace
+  // Strip remaining tags; repeat after entity decode so &lt;script&gt; cannot reappear as a tag
+  text = replaceUntilStable(text, /<[^>]+>/g, '');
   text = decodeHtmlEntities(text);
+  text = replaceUntilStable(text, /<[^>]+>/g, '');
+
+  // Normalize whitespace
   text = text.replace(/ /g, ' ');
   text = text.replace(/[ \t\f\v]+/g, ' ');
   text = text.replace(/ *\n */g, '\n');
