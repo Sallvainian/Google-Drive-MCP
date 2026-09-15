@@ -18,33 +18,85 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      # write, so an @claude task can commit and push a fix rather than only
+      # describe one. This was `contents: read` deliberately — that read was the
+      # one thing keeping the action from writing to a branch — and the operator
+      # chose to grant the write. Anything that can post `@claude` on an issue or
+      # PR comment can now reach a branch through this job.
+      contents: write
+      # write (not read) on both: this workflow answers by posting a comment, on
+      # issues as well as PRs, which the read-only defaults silently forbid.
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
+
+      # Without these the prompt's verify commands below cannot run — this job
+      # otherwise checks out the repo and nothing else.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
 
       - name: Run Claude Code
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--model claude-opus-5'
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
+          # Project rules are NOT duplicated here. The action's injected system
+          # prompt already says "Always check for and follow the repository's
+          # CLAUDE.md file(s)", and CLAUDE.md imports AGENTS.md, so this prompt
+          # points at them instead. Inlining a copy means two places to keep in
+          # sync and one of them silently going stale.
+          prompt: |
+            ## Google-Drive-MCP
 
-          # Optional: Add claude_args to customize behavior and configuration
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr:*)'
+            Read `AGENTS.md` before changing behavior it covers. It is the single
+            source for this repo's policy, layout, conventions and known pitfalls,
+            and `CLAUDE.md` imports it.
 
+            ### Before you claim it works
+
+            Dependencies are installed already. Run what your change touches:
+
+            - `npm run build` — `tsc`. Run this FIRST: the tests import from
+              `dist/`, which is gitignored, so an unbuilt tree has nothing to test
+              against.
+            - `node --test tests/*.test.js` — the unit suite, 45 tests.
+
+            Do NOT run `npm test` unless you have checked what the script is.
+            Per AGENTS.md it was `node --test tests/`, which Node 24 resolves as a
+            module and fails with MODULE_NOT_FOUND before running anything; the
+            fix to `tests/*.test.js` is in flight. Invoke the test files directly
+            and you are correct either way.
+
+            There is no linter and no `lint` script, by design. Do not add one and
+            do not reformat a file you are editing — `src/server.ts` indentation is
+            deliberately inconsistent, so match the surrounding block.
+
+            Do NOT claim the server itself starts or that any Google API call
+            works. That needs `credentials.json` and `token.json`, which are
+            gitignored OAuth secrets this job does not have. The unit suite runs
+            against mocks.
+
+            If you could not verify something, say so plainly rather than
+            implying it passed.
+
+            ---
+
+            Now execute the task from the comment that tagged you.
