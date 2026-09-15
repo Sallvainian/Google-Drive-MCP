@@ -113,7 +113,7 @@ async function executeSingleSlidesBatch(
     if (error.code === 403) {
       throw new UserError(`Permission denied for presentation (ID: ${presentationId}). Ensure the authenticated user has edit access.`);
     }
-    throw new Error(`Google Slides API Error (${error.code}): ${error.message}`);
+    throw new UserError(`Google Slides API Error (${error.code}): ${error.message}`);
   }
 }
 
@@ -142,7 +142,7 @@ export async function getPresentation(
     if (error.code === 403) {
       throw new UserError(`Permission denied for presentation (ID: ${presentationId}). Ensure you have view access.`);
     }
-    throw new Error(`Failed to get presentation: ${error.message}`);
+    throw new UserError(`Failed to get presentation: ${error.message}`);
   }
 }
 
@@ -172,7 +172,7 @@ export async function getSlide(
     if (error.code === 403) {
       throw new UserError(`Permission denied for presentation (ID: ${presentationId}).`);
     }
-    throw new Error(`Failed to get slide: ${error.message}`);
+    throw new UserError(`Failed to get slide: ${error.message}`);
   }
 }
 

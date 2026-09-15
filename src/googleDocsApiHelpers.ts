@@ -64,7 +64,7 @@ async function executeSingleBatch(
         }
         if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}). Check the ID.`);
         if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}). Ensure the authenticated user has edit access.`);
-        throw new Error(`Google API Error (${error.code}): ${error.message}`);
+        throw new UserError(`Google API Error (${error.code}): ${error.message}`);
     }
 }
 
@@ -197,7 +197,7 @@ try {
     console.error(`Error finding text "${textToFind}" in doc ${documentId}: ${error.message || 'Unknown error'}`);
     if (error.code === 404) throw new UserError(`Document not found while searching text (ID: ${documentId}).`);
     if (error.code === 403) throw new UserError(`Permission denied while searching text in doc ${documentId}.`);
-    throw new Error(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
+    throw new UserError(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
 }
 }
 
@@ -275,7 +275,7 @@ try {
     console.error(`Error getting paragraph range for index ${indexWithin} in doc ${documentId}: ${error.message || 'Unknown error'}`);
     if (error.code === 404) throw new UserError(`Document not found while finding paragraph (ID: ${documentId}).`);
     if (error.code === 403) throw new UserError(`Permission denied while accessing doc ${documentId}.`);
-    throw new Error(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
+    throw new UserError(`Failed to find paragraph: ${error.message || 'Unknown error'}`);
 }
 }
 
@@ -519,7 +519,7 @@ export async function getTableCellRange(
         console.error(`Error getting table cell range: ${error.message || 'Unknown error'}`);
         if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}).`);
         if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
-        throw new Error(`Failed to get table cell range: ${error.message || 'Unknown error'}`);
+        throw new UserError(`Failed to get table cell range: ${error.message || 'Unknown error'}`);
     }
 }
 
@@ -801,7 +801,7 @@ export async function uploadImageToDrive(
 
     const fileId = uploadResponse.data.id;
     if (!fileId) {
-        throw new Error('Failed to upload image to Drive - no file ID returned');
+        throw new UserError('Failed to upload image to Drive - no file ID returned');
     }
 
     // Make the file publicly readable
@@ -821,7 +821,7 @@ export async function uploadImageToDrive(
 
     const webContentLink = fileInfo.data.webContentLink;
     if (!webContentLink) {
-        throw new Error('Failed to get public URL for uploaded image');
+        throw new UserError('Failed to get public URL for uploaded image');
     }
 
     return webContentLink;
@@ -1036,6 +1036,6 @@ export async function findSectionRange(
     console.error(`Error finding section range for "${headingText}" in doc ${documentId}: ${err.message || 'Unknown error'}`);
     if (err.code === 404) throw new UserError(`Document not found (ID: ${documentId}).`);
     if (err.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
-    throw new Error(`Failed to find section range: ${err.message || 'Unknown error'}`);
+    throw new UserError(`Failed to find section range: ${err.message || 'Unknown error'}`);
   }
 }

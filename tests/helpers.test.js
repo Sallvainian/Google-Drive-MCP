@@ -1,5 +1,6 @@
 // tests/helpers.test.js
 import { findTextRange, getTableCellRange } from '../dist/googleDocsApiHelpers.js';
+import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
 
@@ -159,6 +160,49 @@ describe('Text Range Finding', () => {
       // Find text that spans runs: "a test"
       const result = await findTextRange(mockDocs, 'doc123', 'a test', 1);
       assert.deepStrictEqual(result, { startIndex: 9, endIndex: 15 });
+    });
+
+    it('should throw UserError for 500 response', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => {
+            const error = new Error('backend');
+            error.code = 500;
+            throw error;
+          })
+        }
+      };
+
+      await assert.rejects(
+        async () => await findTextRange(mockDocs, 'doc123', 'test', 1),
+        (error) => {
+          assert.ok(error instanceof UserError);
+          assert.ok(error.message.startsWith('Failed to retrieve doc for text searching:'));
+          assert.ok(error.message.includes('backend'));
+          return true;
+        }
+      );
+    });
+
+    it('should throw UserError for 404 response', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => {
+            const error = new Error('Not found');
+            error.code = 404;
+            throw error;
+          })
+        }
+      };
+
+      await assert.rejects(
+        async () => await findTextRange(mockDocs, 'doc123', 'test', 1),
+        (error) => {
+          assert.ok(error instanceof UserError);
+          assert.ok(error.message.includes('Document not found while searching text'));
+          return true;
+        }
+      );
     });
   });
 });
@@ -365,6 +409,49 @@ describe('Table Cell Range Finding', () => {
         async () => await getTableCellRange(mockDocs, 'doc123', 999, 0, 0),
         (error) => {
           assert.ok(error.message.includes('No table found at index 999'));
+          return true;
+        }
+      );
+    });
+
+    it('should throw UserError for 500 response', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => {
+            const error = new Error('backend');
+            error.code = 500;
+            throw error;
+          })
+        }
+      };
+
+      await assert.rejects(
+        async () => await getTableCellRange(mockDocs, 'doc123', 10, 0, 0),
+        (error) => {
+          assert.ok(error instanceof UserError);
+          assert.ok(error.message.startsWith('Failed to get table cell range:'));
+          assert.ok(error.message.includes('backend'));
+          return true;
+        }
+      );
+    });
+
+    it('should throw UserError for 404 response', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => {
+            const error = new Error('Not found');
+            error.code = 404;
+            throw error;
+          })
+        }
+      };
+
+      await assert.rejects(
+        async () => await getTableCellRange(mockDocs, 'doc123', 10, 0, 0),
+        (error) => {
+          assert.ok(error instanceof UserError);
+          assert.ok(error.message.includes('Document not found (ID: doc123)'));
           return true;
         }
       );

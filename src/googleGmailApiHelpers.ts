@@ -477,7 +477,7 @@ export async function sendEmail(gmail: Gmail, rawEmail: string, threadId?: strin
     if (error.code === 403) {
       throw new UserError(`Permission denied to send email: ${message}`);
     }
-    throw new Error(`Gmail API Error: ${message}`);
+    throw new UserError(`Gmail API Error: ${message}`);
   }
 }
 
@@ -497,7 +497,7 @@ export async function createDraft(gmail: Gmail, rawEmail: string, threadId?: str
     return response.data;
   } catch (error: any) {
     const message = error.response?.data?.error?.message || error.message;
-    throw new Error(`Gmail API Error creating draft: ${message}`);
+    throw new UserError(`Gmail API Error creating draft: ${message}`);
   }
 }
 
@@ -514,7 +514,7 @@ export async function getMessage(gmail: Gmail, messageId: string, format: 'full'
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -555,7 +555,7 @@ export async function searchMessages(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -572,7 +572,7 @@ export async function getThread(gmail: Gmail, threadId: string, format: 'full' |
     if (error.code === 404) {
       throw new UserError(`Thread not found (ID: ${threadId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -602,7 +602,7 @@ export async function listThreads(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -622,7 +622,7 @@ export async function modifyMessageLabels(gmail: Gmail, messageId: string, addLa
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -666,7 +666,7 @@ export async function deleteMessage(gmail: Gmail, messageId: string): Promise<vo
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -709,7 +709,7 @@ export async function trashMessage(gmail: Gmail, messageId: string): Promise<gma
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -725,7 +725,7 @@ export async function untrashMessage(gmail: Gmail, messageId: string): Promise<g
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -768,7 +768,7 @@ export async function downloadAttachment(gmail: Gmail, messageId: string, attach
     if (error.code === 404) {
       throw new UserError(`Attachment not found (Message: ${messageId}, Attachment: ${attachmentId}).`);
     }
-    throw error instanceof UserError ? error : new Error(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -780,7 +780,7 @@ export async function getUserProfile(gmail: Gmail): Promise<gmail_v1.Schema$Prof
     });
     return response.data;
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -803,7 +803,7 @@ export async function listDrafts(gmail: Gmail, options: {
       nextPageToken: response.data.nextPageToken || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -819,7 +819,7 @@ export async function getDraft(gmail: Gmail, draftId: string): Promise<gmail_v1.
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -840,7 +840,7 @@ export async function updateDraft(gmail: Gmail, draftId: string, rawEmail: strin
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -854,7 +854,7 @@ export async function deleteDraft(gmail: Gmail, draftId: string): Promise<void> 
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -871,6 +871,6 @@ export async function sendDraft(gmail: Gmail, draftId: string): Promise<gmail_v1
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
