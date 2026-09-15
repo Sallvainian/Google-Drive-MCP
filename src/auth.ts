@@ -88,7 +88,7 @@ async function getAuthenticatedEmail(client: OAuth2Client | JWT): Promise<string
   return data.user?.emailAddress ?? '(unknown)';
 }
 
-function accountMatchesRequired(email: string): boolean {
+export function accountMatchesRequired(email: string): boolean {
   const required = process.env.REQUIRED_ACCOUNT_EMAIL;
   if (!required) return true;
   return email.toLowerCase() === required.toLowerCase();
