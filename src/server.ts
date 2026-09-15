@@ -43,6 +43,7 @@ LabelVisibilityParameter,
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
 import * as SlidesHelpers from './googleSlidesApiHelpers.js';
+import * as DriveHelpers from './googleDriveApiHelpers.js';
 import * as GmailHelpers from './googleGmailApiHelpers.js';
 import * as LabelManager from './gmailLabelManager.js';
 import * as FilterManager from './gmailFilterManager.js';
@@ -1722,11 +1723,11 @@ try {
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
     if (args.searchIn === 'name') {
-      queryString += ` and name contains '${args.query}'`;
+      queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     } else if (args.searchIn === 'content') {
-      queryString += ` and fullText contains '${args.query}'`;
+      queryString += ` and fullText contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     } else { // both
-      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+      queryString += ` and (name contains ${DriveHelpers.driveQueryQuoted(args.query)} or fullText contains ${DriveHelpers.driveQueryQuoted(args.query)})`;
     }
   }
 
@@ -1791,16 +1792,16 @@ try {
 
   // Add search criteria
   if (args.searchIn === 'name') {
-    queryString += ` and name contains '${args.searchQuery}'`;
+    queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)}`;
   } else if (args.searchIn === 'content') {
-    queryString += ` and fullText contains '${args.searchQuery}'`;
+    queryString += ` and fullText contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)}`;
   } else {
-    queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
+    queryString += ` and (name contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)} or fullText contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)})`;
   }
 
   // Add date filter if provided
   if (args.modifiedAfter) {
-    queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
+    queryString += ` and modifiedTime > ${DriveHelpers.driveQueryQuoted(args.modifiedAfter)}`;
   }
 
   // fullText search doesn't support orderBy - only apply sorting for name-only search
@@ -1862,7 +1863,7 @@ try {
   cutoffDate.setDate(cutoffDate.getDate() - args.daysBack);
   const cutoffDateStr = cutoffDate.toISOString();
 
-  const queryString = `mimeType='application/vnd.google-apps.document' and trashed=false and modifiedTime > '${cutoffDateStr}'`;
+  const queryString = `mimeType='application/vnd.google-apps.document' and trashed=false and modifiedTime > ${DriveHelpers.driveQueryQuoted(cutoffDateStr)}`;
 
   const response = await drive.files.list({
     q: queryString,
@@ -2013,7 +2014,7 @@ const drive = await getDriveClient();
 log.info(`Listing contents of folder: ${args.folderId}`);
 
 try {
-  let queryString = `'${args.folderId}' in parents and trashed=false`;
+  let queryString = `${DriveHelpers.driveQueryQuoted(args.folderId)} in parents and trashed=false`;
 
   // Filter by type if specified
   if (!args.includeSubfolders && !args.includeFiles) {
@@ -2100,7 +2101,7 @@ interface FolderNode {
 
 async function getFoldersInFolder(parentId: string): Promise<FolderNode[]> {
   const response = await drive.files.list({
-    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    q: `${DriveHelpers.driveQueryQuoted(parentId)} in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     pageSize: 100,
     orderBy: 'name',
     fields: 'files(id,name)',
@@ -3281,7 +3282,7 @@ execute: async (args, { log }) => {
     let usesFullText = false;
     if (args.query) {
       // Use name-only search to allow sorting, fullText search doesn't support orderBy
-      queryString += ` and name contains '${args.query}'`;
+      queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     }
 
     const response = await drive.files.list({
@@ -3733,7 +3734,7 @@ server.addTool({
     try {
       let queryString = "mimeType='application/vnd.google-apps.presentation' and trashed=false";
       if (args.query) {
-        queryString += ` and name contains '${args.query}'`;
+        queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
       }
 
       const response = await drive.files.list({
