@@ -5533,9 +5533,7 @@ server.addTool({
       const originalMessage = await GmailHelpers.getMessage(gmail, args.messageId, 'metadata');
       const headers = GmailHelpers.parseEmailHeaders(originalMessage.payload?.headers || []);
 
-      const to = args.replyAll
-        ? [headers['from'], ...(headers['to']?.split(',').map(s => s.trim()) || [])].filter(Boolean)
-        : [headers['from']];
+      const to = GmailHelpers.buildReplyRecipients(headers['from'], headers['to'], args.replyAll);
 
       const subject = headers['subject']?.startsWith('Re:')
         ? headers['subject']

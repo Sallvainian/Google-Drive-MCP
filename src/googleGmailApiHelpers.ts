@@ -16,8 +16,109 @@ export function validateEmail(email: string): boolean {
   return EMAIL_REGEX.test(email);
 }
 
+// Quote-aware split so "Last, First" <addr> is one mailbox.
+function splitAddressList(header: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (const ch of header) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (ch === ',' && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  const trimmed = current.trim();
+  if (trimmed) {
+    parts.push(trimmed);
+  }
+  return parts;
+}
+
+// Pair < with the first > after it, not the last > in the mailbox.
+function extractAddrSpec(mailbox: string): string {
+  const open = mailbox.indexOf('<');
+  if (open === -1) {
+    return mailbox.trim();
+  }
+  const close = mailbox.indexOf('>', open + 1);
+  if (close === -1) {
+    return '';
+  }
+  return mailbox.slice(open + 1, close).trim();
+}
+
+export function extractEmailAddresses(header?: string): string[] {
+  if (!header) {
+    return [];
+  }
+  const addresses: string[] = [];
+  for (const mailbox of splitAddressList(header)) {
+    const addr = extractAddrSpec(mailbox);
+    if (validateEmail(addr)) {
+      addresses.push(addr);
+    }
+  }
+  return addresses;
+}
+
+export function buildReplyRecipients(
+  fromHeader: string | undefined,
+  toHeader: string | undefined,
+  replyAll: boolean
+): string[] {
+  const recipients = [
+    ...extractEmailAddresses(fromHeader),
+    ...(replyAll ? extractEmailAddresses(toHeader) : []),
+  ];
+  if (recipients.length === 0) {
+    throw new UserError('Cannot reply: no valid recipient address found in the original message.');
+  }
+  return recipients;
+}
+
 // --- RFC 2047 MIME Encoding for Headers ---
+function assertNoCrlf(value: string): void {
+  if (value.includes('\r') || value.includes('\n')) {
+    throw new UserError('Header values must not contain CR or LF.');
+  }
+}
+
+function assertSafeHeaderFields(options: {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  inReplyTo?: string;
+}): void {
+  for (const value of options.to) {
+    assertNoCrlf(value);
+  }
+  if (options.cc) {
+    for (const value of options.cc) {
+      assertNoCrlf(value);
+    }
+  }
+  if (options.bcc) {
+    for (const value of options.bcc) {
+      assertNoCrlf(value);
+    }
+  }
+  assertNoCrlf(options.subject);
+  if (options.inReplyTo) {
+    assertNoCrlf(options.inReplyTo);
+  }
+}
+
 export function encodeEmailHeader(text: string): string {
+  assertNoCrlf(text);
   // Check if encoding is needed (non-ASCII characters)
   if (/^[\x00-\x7F]*$/.test(text)) {
     return text; // Pure ASCII, no encoding needed
@@ -102,6 +203,8 @@ export function createSimpleEmail(options: {
 }): string {
   const { to, cc, bcc, subject, body, htmlBody, mimeType = 'text/plain', inReplyTo } = options;
 
+  assertSafeHeaderFields({ to, cc, bcc, subject, inReplyTo });
+
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const headers: string[] = [];
 
@@ -164,6 +267,8 @@ export async function createEmailWithAttachments(options: {
   if (!attachments || attachments.length === 0) {
     return createSimpleEmail(options);
   }
+
+  assertSafeHeaderFields({ to, cc, bcc, subject, inReplyTo });
 
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const altBoundary = `alt_${boundary}`;
@@ -229,6 +334,7 @@ export async function createEmailWithAttachments(options: {
       const lines = base64Content.match(/.{1,76}/g) || [];
       parts.push(lines.join('\r\n'));
     } catch (error: any) {
+      if (error instanceof UserError) throw error;
       throw new UserError(`Failed to read attachment "${filePath}": ${error.message}`);
     }
   }
