@@ -28,10 +28,11 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 
 - Build first — `npm run build`. Tests import from `dist/`, which is gitignored, so a
   fresh clone has nothing to run against.
-- `npm test` is broken. The script is `node --test tests/`, which Node 24 resolves as a
-  module and fails with MODULE_NOT_FOUND. Use `node --test tests/*.test.js`.
-- That suite is 45 tests: 44 pass. `tests/helpers.test.js:44` fails on a stale `fields`
-  expectation that predates the code requesting table and section data. Pre-existing.
+- `npm test` runs the suite — the script is `node --test tests/*.test.js`. It used to be
+  `node --test tests/`, which Node 24 resolves as a module and fails with
+  MODULE_NOT_FOUND; the script itself was fixed, so no workaround is needed.
+- That suite is 45 tests and all 45 pass. The `tests/helpers.test.js` `fields` expectation
+  that used to fail was corrected to match what `googleDocsApiHelpers.ts:79` requests.
 - No linter or formatter is configured. Do not add one uninvited; there is no `lint` script.
 - `tsconfig.json` covers `src/**/*` only — `tests/` is never typechecked.
 - CI runs no build and no tests; both workflows only invoke `anthropics/claude-code-action@v1`.
