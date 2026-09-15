@@ -1238,7 +1238,7 @@ throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'insertLocalImage',
-description: 'Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder).',
+description: 'Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder). Temporarily grants anyone/reader (anyone-with-link) so Docs can fetch the image, then revokes that grant after insert.',
 parameters: DocumentIdParameter.extend({
 localImagePath: z.string().describe('Absolute path to the local image file (supports .jpg, .jpeg, .png, .gif, .bmp, .webp, .svg).'),
 index: z.number().int().min(1).describe('The index (1-based) where the image should be inserted in the document.'),
@@ -1269,31 +1269,25 @@ log.warn(`Could not determine document's parent folder, using Drive root: ${fold
 }
 }
 
-// Upload the image to Drive
 log.info(`Uploading image to Drive...`);
-const imageUrl = await GDocsHelpers.uploadImageToDrive(
+const uploaded = await GDocsHelpers.insertLocalImageFromPath(
+docs,
 drive,
 args.localImagePath,
-parentFolderId
-);
-log.info(`Image uploaded successfully, public URL: ${imageUrl}`);
-
-// Insert the image into the document
-await GDocsHelpers.insertInlineImage(
-docs,
 args.documentId,
-imageUrl,
 args.index,
 args.width,
-args.height
+args.height,
+parentFolderId
 );
+log.info(`Image uploaded and inserted; temporary anyone/reader grant revoked`);
 
 let sizeInfo = '';
 if (args.width && args.height) {
 sizeInfo = ` with size ${args.width}x${args.height}pt`;
 }
 
-return `Successfully uploaded image to Drive and inserted it at index ${args.index}${sizeInfo}.\nImage URL: ${imageUrl}`;
+return `Successfully uploaded image to Drive as file ${uploaded.fileId} and inserted it at index ${args.index}${sizeInfo}. The temporary anyone/reader grant was revoked.`;
 } catch (error: any) {
 log.error(`Error uploading/inserting local image in doc ${args.documentId}: ${error.message || error}`);
 if (error instanceof UserError) throw error;

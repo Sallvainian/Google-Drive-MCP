@@ -744,17 +744,17 @@ export async function insertInlineImage(
 }
 
 /**
- * Uploads a local image file to Google Drive and returns its public URL
+ * Uploads a local image file to Google Drive and grants anyone/reader so Docs can fetch it
  * @param drive - Google Drive API client
  * @param localFilePath - Path to the local image file
  * @param parentFolderId - Optional parent folder ID (defaults to root)
- * @returns Promise with the public webContentLink URL
+ * @returns Promise with fileId, webContentLink, and the anyone/reader permissionId
  */
 export async function uploadImageToDrive(
     drive: any, // drive_v3.Drive type
     localFilePath: string,
     parentFolderId?: string
-): Promise<string> {
+): Promise<{ fileId: string; webContentLink: string; permissionId: string }> {
     const fs = await import('fs');
     const path = await import('path');
 
@@ -805,26 +805,95 @@ export async function uploadImageToDrive(
     }
 
     // Make the file publicly readable
-    await drive.permissions.create({
+    const permissionResponse = await drive.permissions.create({
         fileId: fileId,
         requestBody: {
             role: 'reader',
             type: 'anyone'
-        }
+        },
+        fields: 'id'
     });
 
-    // Get the webContentLink
-    const fileInfo = await drive.files.get({
-        fileId: fileId,
-        fields: 'webContentLink'
-    });
-
-    const webContentLink = fileInfo.data.webContentLink;
-    if (!webContentLink) {
-        throw new UserError('Failed to get public URL for uploaded image');
+    const permissionId = permissionResponse.data.id;
+    if (!permissionId) {
+        throw new UserError('Failed to upload image to Drive - no permission ID returned');
     }
 
-    return webContentLink;
+    try {
+        const fileInfo = await drive.files.get({
+            fileId: fileId,
+            fields: 'webContentLink'
+        });
+
+        const webContentLink = fileInfo.data.webContentLink;
+        if (!webContentLink) {
+            throw new UserError('Failed to get public URL for uploaded image');
+        }
+
+        return { fileId, webContentLink, permissionId };
+    } catch (getError) {
+        await revokeAnyoneReaderGrant(drive, fileId, permissionId);
+        throw getError;
+    }
+}
+
+/**
+ * Revokes an anyone/reader grant on a Drive file.
+ * @param drive - Google Drive API client
+ * @param fileId - Drive file ID
+ * @param permissionId - Permission ID returned by permissions.create
+ */
+export async function revokeAnyoneReaderGrant(
+    drive: any,
+    fileId: string,
+    permissionId: string
+): Promise<void> {
+    try {
+        await drive.permissions.delete({ fileId, permissionId });
+    } catch (error: any) {
+        throw new UserError(`Failed to revoke the temporary anyone/reader grant on file ${fileId}; the anyone grant may still exist: ${error.message || 'Unknown error'}`);
+    }
+}
+
+/**
+ * Uploads a local image, inserts it into a document, then revokes the temporary anyone/reader grant.
+ * On insert failure the grant is still revoked, then the insert error is rethrown.
+ * @param docs - Google Docs API client
+ * @param drive - Google Drive API client
+ * @param localFilePath - Path to the local image file
+ * @param documentId - The document ID
+ * @param index - Position in the document where image should be inserted (1-based)
+ * @param width - Optional width in points
+ * @param height - Optional height in points
+ * @param parentFolderId - Optional parent folder ID (defaults to root)
+ * @returns Promise with fileId and webContentLink of the uploaded file
+ */
+export async function insertLocalImageFromPath(
+    docs: Docs,
+    drive: any,
+    localFilePath: string,
+    documentId: string,
+    index: number,
+    width?: number,
+    height?: number,
+    parentFolderId?: string
+): Promise<{ fileId: string; webContentLink: string }> {
+    const uploaded = await uploadImageToDrive(drive, localFilePath, parentFolderId);
+    try {
+        await insertInlineImage(
+            docs,
+            documentId,
+            uploaded.webContentLink,
+            index,
+            width,
+            height
+        );
+    } catch (insertError) {
+        await revokeAnyoneReaderGrant(drive, uploaded.fileId, uploaded.permissionId);
+        throw insertError;
+    }
+    await revokeAnyoneReaderGrant(drive, uploaded.fileId, uploaded.permissionId);
+    return { fileId: uploaded.fileId, webContentLink: uploaded.webContentLink };
 }
 
 // --- Tab Management Helpers ---
