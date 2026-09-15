@@ -2,6 +2,7 @@
 import { gmail_v1 } from 'googleapis';
 import { UserError } from 'fastmcp';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 
 type Gmail = gmail_v1.Gmail;
@@ -850,12 +851,33 @@ export async function untrashMessage(gmail: Gmail, messageId: string): Promise<g
   }
 }
 
+export function resolveSafeDownloadPath(saveDir: string, filename: string, overwrite?: boolean): string {
+  const resolvedDir = path.resolve(saveDir);
+  const base = path.basename(filename);
+  if (base === '' || base === '.' || base === '..') {
+    throw new UserError('Download path escapes the requested directory.');
+  }
+  const fullPath = path.resolve(resolvedDir, base);
+  // basename alone is not enough (path.basename('..') === '..'); require a child of resolvedDir.
+  if (!fullPath.startsWith(resolvedDir + path.sep)) {
+    throw new UserError('Download path escapes the requested directory.');
+  }
+  if (overwrite !== true && existsSync(fullPath)) {
+    throw new UserError(`File already exists: ${fullPath}. Pass overwrite: true to replace it.`);
+  }
+  return fullPath;
+}
+
 // --- Download Attachment Helper ---
-export async function downloadAttachment(gmail: Gmail, messageId: string, attachmentId: string, savePath?: string, filename?: string): Promise<{
+export async function downloadAttachment(gmail: Gmail, messageId: string, attachmentId: string, savePath?: string, filename?: string, overwrite?: boolean): Promise<{
   savedTo: string;
   size: number;
 }> {
   try {
+    const saveDir = path.resolve(savePath || process.cwd());
+    const saveFilename = filename || `attachment_${attachmentId.substring(0, 8)}`;
+    const fullPath = resolveSafeDownloadPath(saveDir, saveFilename, overwrite);
+
     // Get the attachment data
     const response = await gmail.users.messages.attachments.get({
       userId: 'me',
@@ -870,15 +892,8 @@ export async function downloadAttachment(gmail: Gmail, messageId: string, attach
     // Decode base64url data
     const data = Buffer.from(response.data.data, 'base64');
 
-    // Determine save path
-    const saveDir = savePath || process.cwd();
-    const saveFilename = filename || `attachment_${attachmentId.substring(0, 8)}`;
-    const fullPath = path.join(saveDir, saveFilename);
-
-    // Ensure directory exists
     await fs.mkdir(saveDir, { recursive: true });
 
-    // Write file
     await fs.writeFile(fullPath, data);
 
     return {

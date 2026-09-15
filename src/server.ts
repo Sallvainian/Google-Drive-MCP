@@ -2538,13 +2538,13 @@ parameters: z.object({
   fileId: z.string().describe('Google Drive file ID to download.'),
   savePath: z.string().describe('Absolute path to the local directory where the file should be saved.'),
   filename: z.string().optional().describe('Optional override for the filename. If not provided, uses the original file name from Drive.'),
+  overwrite: z.boolean().optional().default(false).describe('Replace an existing file at the destination. Defaults to false.'),
   exportFormat: z.enum(['default', 'pdf', 'docx', 'xlsx', 'csv', 'pptx', 'txt']).optional().default('default')
     .describe('Export format for Google-native files. "default" uses docx/xlsx/pptx. For Google Docs: pdf, docx, txt. For Sheets: pdf, xlsx, csv. For Slides: pdf, pptx.'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
 const fs = await import('fs');
-const path = await import('path');
 
 log.info(`Downloading file ${args.fileId} to ${args.savePath}`);
 
@@ -2636,7 +2636,7 @@ try {
       finalFilename = originalName + exportConfig.extension;
     }
 
-    localFilePath = path.join(args.savePath, finalFilename);
+    localFilePath = GmailHelpers.resolveSafeDownloadPath(args.savePath, finalFilename, args.overwrite);
 
     log.info(`Exporting Google native file as ${exportConfig.extension} to ${localFilePath}`);
 
@@ -2669,7 +2669,7 @@ try {
       finalFilename = originalName;
     }
 
-    localFilePath = path.join(args.savePath, finalFilename);
+    localFilePath = GmailHelpers.resolveSafeDownloadPath(args.savePath, finalFilename, args.overwrite);
 
     log.info(`Downloading regular file to ${localFilePath}`);
 
@@ -2687,6 +2687,7 @@ try {
   }
 } catch (error: any) {
   log.error(`Error downloading file: ${error.message || error}`);
+  if (error instanceof UserError) throw error;
   if (error.code === 404) throw new UserError("File not found. Check the file ID.");
   if (error.code === 403) throw new UserError("Permission denied or file too large to export (>10MB via API). Check file access permissions.");
   if (error.code === 'ENOSPC') throw new UserError("No space left on device. Free up disk space and try again.");
@@ -5084,7 +5085,8 @@ server.addTool({
         args.messageId,
         args.attachmentId,
         args.savePath,
-        args.filename
+        args.filename,
+        args.overwrite
       );
 
       return JSON.stringify({
