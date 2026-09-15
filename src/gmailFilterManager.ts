@@ -114,8 +114,15 @@ export async function getFilter(gmail: Gmail, filterId: string): Promise<FilterI
 // --- Create Filter ---
 export async function createFilter(gmail: Gmail, criteria: FilterCriteriaArgs, action: FilterActionArgs): Promise<FilterInfo> {
   try {
-    // Validate that at least one criteria is provided
-    const hasCriteria = Object.values(criteria).some(v => v !== undefined);
+    // Positive matcher: from/to/subject/query (non-empty), size (including 0), or hasAttachment === true.
+    // false, '', negatedQuery, excludeChats, and sizeComparison do not count.
+    const hasCriteria =
+      (typeof criteria.from === 'string' && criteria.from !== '') ||
+      (typeof criteria.to === 'string' && criteria.to !== '') ||
+      (typeof criteria.subject === 'string' && criteria.subject !== '') ||
+      (typeof criteria.query === 'string' && criteria.query !== '') ||
+      typeof criteria.size === 'number' ||
+      criteria.hasAttachment === true;
     if (!hasCriteria) {
       throw new UserError('At least one filter criteria must be specified.');
     }
