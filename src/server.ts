@@ -1258,7 +1258,8 @@ if (args.uploadToSameFolder) {
 try {
 const docInfo = await drive.files.get({
 fileId: args.documentId,
-fields: 'parents'
+fields: 'parents',
+supportsAllDrives: true
 });
 if (docInfo.data.parents && docInfo.data.parents.length > 0) {
 parentFolderId = docInfo.data.parents[0];
@@ -1737,6 +1738,8 @@ try {
     pageSize: args.maxResults,
     ...(usesFullText ? {} : { orderBy: args.orderBy === 'name' ? 'name' : args.orderBy }),
     fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1810,6 +1813,8 @@ try {
     pageSize: args.maxResults,
     ...(usesFullText ? {} : { orderBy: 'modifiedTime desc' }),
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1868,6 +1873,8 @@ try {
     pageSize: args.maxResults,
     orderBy: 'modifiedTime desc',
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),lastModifyingUser(displayName))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1912,6 +1919,7 @@ try {
     // Note: 'permissions' and 'alternateLink' fields removed - they cause
     // "Invalid field selection" errors for Google Docs files
     fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -1985,6 +1993,7 @@ try {
   const response = await drive.files.create({
     requestBody: folderMetadata,
     fields: 'id,name,parents,webViewLink',
+    supportsAllDrives: true,
   });
 
   const folder = response.data;
@@ -2030,6 +2039,8 @@ try {
     pageSize: args.maxResults,
     orderBy: 'folder,name',
     fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const items = response.data.files || [];
@@ -2103,6 +2114,8 @@ async function getFoldersInFolder(parentId: string): Promise<FolderNode[]> {
     pageSize: 100,
     orderBy: 'name',
     fields: 'files(id,name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   return (response.data.files || []).map(f => ({
@@ -2161,6 +2174,7 @@ try {
     const rootFolder = await drive.files.get({
       fileId: args.folderId,
       fields: 'name',
+      supportsAllDrives: true,
     });
     rootName = rootFolder.data.name || 'Unknown Folder';
   }
@@ -2200,6 +2214,7 @@ try {
   const response = await drive.files.get({
     fileId: args.folderId,
     fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents',
+    supportsAllDrives: true,
   });
 
   const folder = response.data;
@@ -2267,6 +2282,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,parents',
+    supportsAllDrives: true,
   });
 
   const fileName = fileInfo.data.name;
@@ -2276,6 +2292,7 @@ try {
     fileId: args.fileId,
     addParents: args.newParentId,
     fields: 'id,name,parents',
+    supportsAllDrives: true,
   };
 
   if (args.removeFromAllParents && currentParents.length > 0) {
@@ -2312,6 +2329,7 @@ try {
   const originalFile = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,parents',
+    supportsAllDrives: true,
   });
 
   const copyMetadata: drive_v3.Schema$File = {
@@ -2328,6 +2346,7 @@ try {
     fileId: args.fileId,
     requestBody: copyMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const copiedFile = response.data;
@@ -2359,6 +2378,7 @@ try {
       name: args.newName,
     },
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -2388,6 +2408,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,mimeType',
+    supportsAllDrives: true,
   });
 
   const fileName = fileInfo.data.name;
@@ -2396,6 +2417,7 @@ try {
   if (args.skipTrash) {
     await drive.files.delete({
       fileId: args.fileId,
+      supportsAllDrives: true,
     });
     return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}".`;
   } else {
@@ -2404,6 +2426,7 @@ try {
       requestBody: {
         trashed: true,
       },
+      supportsAllDrives: true,
     });
     return `Moved ${isFolder ? 'folder' : 'file'} "${fileName}" to trash. It can be restored from the trash.`;
   }
@@ -2479,6 +2502,7 @@ try {
     requestBody: fileMetadata,
     media: media,
     fields: 'id,name,webViewLink,size',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -2562,6 +2586,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'id,name,mimeType,size',
+    supportsAllDrives: true,
   });
 
   const fileMimeType = fileInfo.data.mimeType || '';
@@ -2675,6 +2700,7 @@ try {
     const response = await drive.files.get({
       fileId: args.fileId,
       alt: 'media',
+      supportsAllDrives: true,
     }, {
       responseType: 'arraybuffer',
     });
@@ -2721,6 +2747,7 @@ execute: async (args, { log }) => {
       },
       sendNotificationEmail: args.sendNotification,
       emailMessage: args.message,
+      supportsAllDrives: true,
     });
     return `Successfully shared file with ${args.email} (role: ${args.role}).`;
   } catch (error: any) {
@@ -2749,11 +2776,13 @@ execute: async (args, { log }) => {
         type: 'anyone',
         role: args.role,
       },
+      supportsAllDrives: true,
     });
     // Get the file's web view link
     const fileInfo = await drive.files.get({
       fileId: args.fileId,
       fields: 'webViewLink',
+      supportsAllDrives: true,
     });
     return `File is now publicly accessible (role: ${args.role}).\nPublic link: ${fileInfo.data.webViewLink}`;
   } catch (error: any) {
@@ -2778,6 +2807,7 @@ execute: async (args, { log }) => {
     const response = await drive.permissions.list({
       fileId: args.fileId,
       fields: 'permissions(id,type,role,emailAddress,displayName,domain)',
+      supportsAllDrives: true,
     });
     const permissions = response.data.permissions || [];
     if (permissions.length === 0) {
@@ -2832,6 +2862,7 @@ try {
   const response = await drive.files.create({
     requestBody: documentMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const document = response.data;
@@ -2896,6 +2927,7 @@ try {
     fileId: args.templateId,
     requestBody: copyMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const document = response.data;
@@ -3226,6 +3258,7 @@ execute: async (args, { log }) => {
     const driveResponse = await drive.files.create({
       requestBody: spreadsheetMetadata,
       fields: 'id,name,webViewLink',
+      supportsAllDrives: true,
     });
 
     const spreadsheetId = driveResponse.data.id;
@@ -3288,6 +3321,8 @@ execute: async (args, { log }) => {
       pageSize: args.maxResults,
       orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
       fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     const files = response.data.files || [];
@@ -3473,6 +3508,7 @@ Example content array:
       const createResponse = await drive.files.create({
         requestBody: documentMetadata,
         fields: 'id,name,webViewLink',
+        supportsAllDrives: true,
       });
 
       const document = createResponse.data;
@@ -3740,6 +3776,8 @@ server.addTool({
         pageSize: args.maxResults,
         orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
       });
 
       const files = response.data.files || [];

@@ -123,10 +123,12 @@ describe('insertLocalImageFromPath', () => {
       fileId: 'img1',
       requestBody: { role: 'reader', type: 'anyone' },
       fields: 'id',
+      supportsAllDrives: true,
     });
     assert.deepStrictEqual(drive.permissions.delete.mock.calls[0].arguments[0], {
       fileId: 'img1',
       permissionId: 'anyoneWithLink',
+      supportsAllDrives: true,
     });
     assert.strictEqual(drive.permissions.create.mock.calls.length, 1);
     assert.ok(order.indexOf('permissions.create') < order.indexOf('permissions.delete'));
@@ -151,6 +153,7 @@ describe('insertLocalImageFromPath', () => {
     assert.deepStrictEqual(drive.permissions.delete.mock.calls[0].arguments[0], {
       fileId: 'img1',
       permissionId: 'anyoneWithLink',
+      supportsAllDrives: true,
     });
   });
 
@@ -237,6 +240,7 @@ describe('insertLocalImageFromPath', () => {
     assert.deepStrictEqual(drive.permissions.delete.mock.calls[0].arguments[0], {
       fileId: 'img1',
       permissionId: 'anyoneWithLink',
+      supportsAllDrives: true,
     });
   });
 
@@ -256,6 +260,7 @@ describe('insertLocalImageFromPath', () => {
     assert.deepStrictEqual(drive.permissions.delete.mock.calls[0].arguments[0], {
       fileId: 'img1',
       permissionId: 'anyoneWithLink',
+      supportsAllDrives: true,
     });
   });
 

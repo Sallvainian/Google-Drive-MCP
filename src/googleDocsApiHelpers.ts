@@ -796,7 +796,8 @@ export async function uploadImageToDrive(
     const uploadResponse = await drive.files.create({
         requestBody: fileMetadata,
         media: media,
-        fields: 'id,webViewLink,webContentLink'
+        fields: 'id,webViewLink,webContentLink',
+        supportsAllDrives: true
     });
 
     const fileId = uploadResponse.data.id;
@@ -811,7 +812,8 @@ export async function uploadImageToDrive(
             role: 'reader',
             type: 'anyone'
         },
-        fields: 'id'
+        fields: 'id',
+        supportsAllDrives: true
     });
 
     const permissionId = permissionResponse.data.id;
@@ -822,7 +824,8 @@ export async function uploadImageToDrive(
     try {
         const fileInfo = await drive.files.get({
             fileId: fileId,
-            fields: 'webContentLink'
+            fields: 'webContentLink',
+            supportsAllDrives: true
         });
 
         const webContentLink = fileInfo.data.webContentLink;
@@ -849,7 +852,7 @@ export async function revokeAnyoneReaderGrant(
     permissionId: string
 ): Promise<void> {
     try {
-        await drive.permissions.delete({ fileId, permissionId });
+        await drive.permissions.delete({ fileId, permissionId, supportsAllDrives: true });
     } catch (error: any) {
         throw new UserError(`Failed to revoke the temporary anyone/reader grant on file ${fileId}; the anyone grant may still exist: ${error.message || 'Unknown error'}`);
     }
