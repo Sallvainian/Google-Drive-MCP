@@ -10,7 +10,7 @@ type Docs = docs_v1.Docs; // Alias for convenience
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 
 // --- Core Helper to Execute Batch Updates ---
-export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[]): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
+export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[], writeControl?: docs_v1.Schema$WriteControl): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
   if (!requests || requests.length === 0) {
     return {}; // Nothing to do
   }
@@ -20,35 +20,52 @@ export async function executeBatchUpdate(docs: Docs, documentId: string, request
   if (requests.length > MAX_BATCH_UPDATE_REQUESTS) {
     console.log(`Splitting ${requests.length} requests into batches of ${MAX_BATCH_UPDATE_REQUESTS}`);
     let combinedResponse: docs_v1.Schema$BatchUpdateDocumentResponse = {};
+    let currentWriteControl = writeControl;
+    let deleteCommitted = false;
 
     for (let i = 0; i < requests.length; i += MAX_BATCH_UPDATE_REQUESTS) {
       const chunk = requests.slice(i, i + MAX_BATCH_UPDATE_REQUESTS);
       console.log(`Executing batch ${Math.floor(i / MAX_BATCH_UPDATE_REQUESTS) + 1} (${chunk.length} requests)`);
-      const response = await executeSingleBatch(docs, documentId, chunk);
-      // Merge replies
-      if (response.replies) {
-        combinedResponse.replies = [...(combinedResponse.replies || []), ...response.replies];
+      try {
+        const response = await executeSingleBatch(docs, documentId, chunk, currentWriteControl);
+        if (chunk.some((request) => request.deleteContentRange)) {
+          deleteCommitted = true;
+        }
+        // Merge replies
+        if (response.replies) {
+          combinedResponse.replies = [...(combinedResponse.replies || []), ...response.replies];
+        }
+        combinedResponse.documentId = response.documentId;
+        combinedResponse.writeControl = response.writeControl;
+        if (response.writeControl?.requiredRevisionId) {
+          currentWriteControl = { requiredRevisionId: response.writeControl.requiredRevisionId };
+        }
+      } catch (error: unknown) {
+        if (deleteCommitted) {
+          const original = error instanceof Error ? error.message : String(error);
+          throw new UserError(`${original} Original content was already deleted and was not restored.`);
+        }
+        throw error;
       }
-      combinedResponse.documentId = response.documentId;
-      combinedResponse.writeControl = response.writeControl;
     }
 
     return combinedResponse;
   }
 
-  return executeSingleBatch(docs, documentId, requests);
+  return executeSingleBatch(docs, documentId, requests, writeControl);
 }
 
 // Internal: execute a single batch (guaranteed <= MAX_BATCH_UPDATE_REQUESTS)
 async function executeSingleBatch(
   docs: Docs,
   documentId: string,
-  requests: docs_v1.Schema$Request[]
+  requests: docs_v1.Schema$Request[],
+  writeControl?: docs_v1.Schema$WriteControl
 ): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
     try {
         const response = await docs.documents.batchUpdate({
             documentId: documentId,
-            requestBody: { requests },
+            requestBody: writeControl ? { requests, writeControl } : { requests },
         });
         return response.data;
     } catch (error: any) {
@@ -1222,11 +1239,11 @@ export async function findSectionRange(
   docs: Docs,
   documentId: string,
   headingText: string,
-): Promise<{ headingStart: number; headingEnd: number; sectionEnd: number } | null> {
+): Promise<{ headingStart: number; headingEnd: number; sectionEnd: number; revisionId?: string | null } | null> {
   try {
     const res = await docs.documents.get({
       documentId,
-      fields: 'body(content(paragraph(elements(textRun(content)),paragraphStyle(namedStyleType)),startIndex,endIndex))',
+      fields: 'revisionId,body(content(paragraph(elements(textRun(content)),paragraphStyle(namedStyleType)),startIndex,endIndex))',
     });
 
     if (!res.data.body?.content) {
@@ -1275,7 +1292,7 @@ export async function findSectionRange(
         }
 
         console.log(`Found section "${headingText}" (level ${headingLevel}): heading=${headingStart}-${headingEnd}, sectionEnd=${sectionEnd}`);
-        return { headingStart, headingEnd, sectionEnd };
+        return { headingStart, headingEnd, sectionEnd, revisionId: res.data.revisionId };
       }
     }
 
@@ -1288,4 +1305,190 @@ export async function findSectionRange(
     if (err.code === 403) throw new UserError(`Permission denied for document (ID: ${documentId}).`);
     throw new UserError(`Failed to find section range: ${err.message || 'Unknown error'}`);
   }
+}
+
+export type FormattedSection = {
+  type: 'heading1' | 'heading2' | 'heading3' | 'heading4' | 'title' | 'subtitle' | 'normal' | 'bullet' | 'numbered';
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+};
+
+export function buildFormattedContentRequests(
+  sections: FormattedSection[],
+  startingIndex: number
+): { textRequests: docs_v1.Schema$Request[], styleRequests: docs_v1.Schema$Request[], finalIndex: number } {
+  const textRequests: docs_v1.Schema$Request[] = [];
+  const styleRequests: docs_v1.Schema$Request[] = [];
+  let currentIndex = startingIndex;
+
+  for (const section of sections) {
+    const text = section.text + '\n';
+    const textLength = text.length;
+    const startIndex = currentIndex;
+    const endIndex = currentIndex + textLength;
+
+    textRequests.push({
+      insertText: {
+        location: { index: currentIndex },
+        text: text,
+      },
+    });
+
+    let namedStyleType: string | null = null;
+    let isBullet = false;
+    let isNumbered = false;
+
+    switch (section.type) {
+      case 'title': namedStyleType = 'TITLE'; break;
+      case 'subtitle': namedStyleType = 'SUBTITLE'; break;
+      case 'heading1': namedStyleType = 'HEADING_1'; break;
+      case 'heading2': namedStyleType = 'HEADING_2'; break;
+      case 'heading3': namedStyleType = 'HEADING_3'; break;
+      case 'heading4': namedStyleType = 'HEADING_4'; break;
+      case 'bullet': isBullet = true; break;
+      case 'numbered': isNumbered = true; break;
+      default: namedStyleType = 'NORMAL_TEXT'; break;
+    }
+
+    if (namedStyleType) {
+      styleRequests.push({
+        updateParagraphStyle: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          paragraphStyle: { namedStyleType },
+          fields: 'namedStyleType',
+        },
+      });
+    }
+
+    if (isBullet) {
+      styleRequests.push({
+        createParagraphBullets: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
+        },
+      });
+    }
+
+    if (isNumbered) {
+      styleRequests.push({
+        createParagraphBullets: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          bulletPreset: 'NUMBERED_DECIMAL_NESTED',
+        },
+      });
+    }
+
+    const textStyleFields: string[] = [];
+    const textStyle: docs_v1.Schema$TextStyle = {};
+
+    if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
+    if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
+    if (section.color) {
+      const hex = section.color.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16) / 255;
+      const g = parseInt(hex.substring(2, 4), 16) / 255;
+      const b = parseInt(hex.substring(4, 6), 16) / 255;
+      textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
+      textStyleFields.push('foregroundColor');
+    }
+
+    if (textStyleFields.length > 0) {
+      styleRequests.push({
+        updateTextStyle: {
+          range: { startIndex, endIndex: endIndex - 1 },
+          textStyle,
+          fields: textStyleFields.join(','),
+        },
+      });
+    }
+
+    currentIndex = endIndex;
+  }
+
+  return { textRequests, styleRequests, finalIndex: currentIndex };
+}
+
+function assertFormattedContentNotEmpty(content: FormattedSection[]): void {
+  if (!content || content.length === 0) {
+    throw new UserError('content must not be empty.');
+  }
+}
+
+function requireRevisionId(revisionId: string | null | undefined): string {
+  if (!revisionId) {
+    throw new UserError('Document revision ID was not returned; cannot pin this write.');
+  }
+  return revisionId;
+}
+
+export async function replaceFormattedDocumentContent(
+  docs: Docs,
+  documentId: string,
+  content: FormattedSection[],
+): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
+  assertFormattedContentNotEmpty(content);
+
+  const docResponse = await docs.documents.get({
+    documentId,
+    fields: 'revisionId,body(content(endIndex))',
+  });
+
+  const revisionId = requireRevisionId(docResponse.data.revisionId);
+
+  let endIndex = 1;
+  if (docResponse.data.body?.content) {
+    const lastElement = docResponse.data.body.content[docResponse.data.body.content.length - 1];
+    if (lastElement?.endIndex) {
+      endIndex = lastElement.endIndex;
+    }
+  }
+
+  const requests: docs_v1.Schema$Request[] = [];
+  if (endIndex > 2) {
+    requests.push({
+      deleteContentRange: {
+        range: { startIndex: 1, endIndex: endIndex - 1 },
+      },
+    });
+  }
+
+  const { textRequests, styleRequests } = buildFormattedContentRequests(content, 1);
+  requests.push(...textRequests, ...styleRequests);
+
+  return executeBatchUpdate(docs, documentId, requests, { requiredRevisionId: revisionId });
+}
+
+export async function updateFormattedDocumentSection(
+  docs: Docs,
+  documentId: string,
+  headingText: string,
+  content: FormattedSection[],
+  replaceHeading: boolean = false,
+): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
+  assertFormattedContentNotEmpty(content);
+
+  const range = await findSectionRange(docs, documentId, headingText);
+  if (!range) {
+    throw new UserError(`Could not find a heading matching "${headingText}" in the document. Make sure the heading text is an exact match.`);
+  }
+
+  const revisionId = requireRevisionId(range.revisionId);
+  const deleteStart = replaceHeading ? range.headingStart : range.headingEnd;
+  const deleteEnd = range.sectionEnd;
+
+  const requests: docs_v1.Schema$Request[] = [];
+  if (deleteEnd > deleteStart) {
+    requests.push({
+      deleteContentRange: {
+        range: { startIndex: deleteStart, endIndex: deleteEnd - 1 },
+      },
+    });
+  }
+
+  const { textRequests, styleRequests } = buildFormattedContentRequests(content, deleteStart);
+  requests.push(...textRequests, ...styleRequests);
+
+  return executeBatchUpdate(docs, documentId, requests, { requiredRevisionId: revisionId });
 }

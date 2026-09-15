@@ -3214,103 +3214,6 @@ const FormattedSectionSchema = z.object({
 
 const FormattedContentSchema = z.array(FormattedSectionSchema).describe('Array of formatted content sections to insert');
 
-type FormattedSection = z.infer<typeof FormattedSectionSchema>;
-
-function buildFormattedContentRequests(
-  sections: FormattedSection[],
-  startingIndex: number
-): { textRequests: docs_v1.Schema$Request[], styleRequests: docs_v1.Schema$Request[], finalIndex: number } {
-  const textRequests: docs_v1.Schema$Request[] = [];
-  const styleRequests: docs_v1.Schema$Request[] = [];
-  let currentIndex = startingIndex;
-
-  for (const section of sections) {
-    const text = section.text + '\n';
-    const textLength = text.length;
-    const startIndex = currentIndex;
-    const endIndex = currentIndex + textLength;
-
-    textRequests.push({
-      insertText: {
-        location: { index: currentIndex },
-        text: text,
-      },
-    });
-
-    let namedStyleType: string | null = null;
-    let isBullet = false;
-    let isNumbered = false;
-
-    switch (section.type) {
-      case 'title': namedStyleType = 'TITLE'; break;
-      case 'subtitle': namedStyleType = 'SUBTITLE'; break;
-      case 'heading1': namedStyleType = 'HEADING_1'; break;
-      case 'heading2': namedStyleType = 'HEADING_2'; break;
-      case 'heading3': namedStyleType = 'HEADING_3'; break;
-      case 'heading4': namedStyleType = 'HEADING_4'; break;
-      case 'bullet': isBullet = true; break;
-      case 'numbered': isNumbered = true; break;
-      default: namedStyleType = 'NORMAL_TEXT'; break;
-    }
-
-    if (namedStyleType) {
-      styleRequests.push({
-        updateParagraphStyle: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          paragraphStyle: { namedStyleType },
-          fields: 'namedStyleType',
-        },
-      });
-    }
-
-    if (isBullet) {
-      styleRequests.push({
-        createParagraphBullets: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
-        },
-      });
-    }
-
-    if (isNumbered) {
-      styleRequests.push({
-        createParagraphBullets: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          bulletPreset: 'NUMBERED_DECIMAL_NESTED',
-        },
-      });
-    }
-
-    const textStyleFields: string[] = [];
-    const textStyle: docs_v1.Schema$TextStyle = {};
-
-    if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
-    if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
-    if (section.color) {
-      const hex = section.color.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16) / 255;
-      const g = parseInt(hex.substring(2, 4), 16) / 255;
-      const b = parseInt(hex.substring(4, 6), 16) / 255;
-      textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
-      textStyleFields.push('foregroundColor');
-    }
-
-    if (textStyleFields.length > 0) {
-      styleRequests.push({
-        updateTextStyle: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          textStyle,
-          fields: textStyleFields.join(','),
-        },
-      });
-    }
-
-    currentIndex = endIndex;
-  }
-
-  return { textRequests, styleRequests, finalIndex: currentIndex };
-}
-
 server.addTool({
   name: 'createFormattedDocument',
   description: `Creates a new Google Document with properly formatted content. Instead of raw text, you provide structured sections with formatting types (headings, bullets, etc.) and the tool applies proper Google Docs formatting automatically. This prevents auto-list conversion issues and ensures clean, professional documents.
@@ -3359,28 +3262,16 @@ Example content array:
       log.info(`Document created: ${documentId}`);
 
       // Step 2: Build and execute batch update requests for all content
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, 1);
+      await GDocsHelpers.executeBatchUpdate(docs, documentId, [...textRequests, ...styleRequests]);
+      log.info(`Inserted ${textRequests.length} text sections`);
+      log.info(`Applied ${styleRequests.length} style updates`);
 
       return `Successfully created formatted document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}\n\nAdded ${args.content.length} formatted sections.`;
 
     } catch (error: any) {
       log.error(`Error creating formatted document: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
       throw new UserError(`Failed to create formatted document: ${error.message || 'Unknown error'}`);
@@ -3410,23 +3301,10 @@ Example content array:
     log.info(`Inserting ${args.content.length} formatted sections into document ${args.documentId} at index ${args.index}`);
 
     try {
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, args.index);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, args.index);
+      await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [...textRequests, ...styleRequests]);
+      log.info(`Inserted ${textRequests.length} text sections`);
+      log.info(`Applied ${styleRequests.length} style updates`);
 
       return `Successfully inserted ${args.content.length} formatted sections at index ${args.index}.`;
 
@@ -3451,52 +3329,7 @@ IMPORTANT: This will DELETE all existing content and replace it with the new for
     log.info(`Replacing content in document ${args.documentId} with ${args.content.length} formatted sections`);
 
     try {
-      // Step 1: Get current document to find its length
-      const docResponse = await docs.documents.get({
-        documentId: args.documentId,
-        fields: 'body(content(endIndex))',
-      });
-
-      // Find the end index of the document
-      let endIndex = 1;
-      if (docResponse.data.body?.content) {
-        const lastElement = docResponse.data.body.content[docResponse.data.body.content.length - 1];
-        if (lastElement?.endIndex) {
-          endIndex = lastElement.endIndex;
-        }
-      }
-
-      // Step 2: Delete all existing content (if any)
-      if (endIndex > 2) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: {
-                range: { startIndex: 1, endIndex: endIndex - 1 },
-              },
-            }],
-          },
-        });
-        log.info(`Deleted existing content (indices 1-${endIndex - 1})`);
-      }
-
-      // Step 3: Insert new formatted content
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-      }
+      await GDocsHelpers.replaceFormattedDocumentContent(docs, args.documentId, args.content);
 
       return `Successfully replaced document content with ${args.content.length} formatted sections.`;
 
@@ -3535,52 +3368,13 @@ Example: To replace everything under "Block 2: Activities" with new content:
     log.info(`Updating section "${args.headingText}" in document ${args.documentId} (replaceHeading: ${args.replaceHeading})`);
 
     try {
-      // Step 1: Find the section range
-      const range = await GDocsHelpers.findSectionRange(docs, args.documentId, args.headingText);
-      if (!range) {
-        throw new UserError(`Could not find a heading matching "${args.headingText}" in the document. Make sure the heading text is an exact match.`);
-      }
-
-      const { headingStart, headingEnd, sectionEnd } = range;
-
-      // Step 2: Determine delete range
-      const deleteStart = args.replaceHeading ? headingStart : headingEnd;
-      const deleteEnd = sectionEnd;
-
-      // Step 3: Delete the section content
-      if (deleteEnd > deleteStart) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: {
-                range: { startIndex: deleteStart, endIndex: deleteEnd - 1 },
-              },
-            }],
-          },
-        });
-        log.info(`Deleted section content (indices ${deleteStart}-${deleteEnd - 1})`);
-      }
-
-      // Step 4: Insert new formatted content at the deletion point
-      const insertIndex = deleteStart;
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, insertIndex);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      await GDocsHelpers.updateFormattedDocumentSection(
+        docs,
+        args.documentId,
+        args.headingText,
+        args.content,
+        args.replaceHeading,
+      );
 
       return `Successfully updated section "${args.headingText}" with ${args.content.length} formatted sections.${args.replaceHeading ? ' (heading was also replaced)' : ''}`;
 
