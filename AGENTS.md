@@ -37,8 +37,8 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 - `tsconfig.json` covers `src/**/*` only — `tests/` is never typechecked.
 - CI runs no build and no tests; both workflows only invoke `anthropics/claude-code-action@v1`.
   Verify locally, nothing will catch it for you.
-- No Node version is declared (no `engines`, no `.nvmrc`). README says 18+; 24 breaks the
-  test script above.
+- No Node version is declared (no `engines`, no `.nvmrc`). README says 18+; both CI
+  workflows pin Node 24.
 
 ## Conventions that differ from defaults
 
