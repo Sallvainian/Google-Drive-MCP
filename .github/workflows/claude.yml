@@ -20,11 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      # read, deliberately. My-Love grants `contents: write` so an @claude task
-      # can push a fix rather than only describe one; that also means anything
-      # able to post `@claude` on a comment can reach a branch. Left at read
-      # here until the operator chooses otherwise.
-      contents: read
+      # write, so an @claude task can commit and push a fix rather than only
+      # describe one. This was `contents: read` deliberately — that read was the
+      # one thing keeping the action from writing to a branch — and the operator
+      # chose to grant the write. Anything that can post `@claude` on an issue or
+      # PR comment can now reach a branch through this job.
+      contents: write
       # write (not read) on both: this workflow answers by posting a comment, on
       # issues as well as PRs, which the read-only defaults silently forbid.
       pull-requests: write
