@@ -37,7 +37,28 @@ first_run_note = "run `grok` once in the project and run /hooks-trust to trust p
 # now that grok is the primary dev adapter, not only the reviewer.
 seed_files = [".grok/skills", ".grok/hooks"]
 
+# SessionEnd is deliberately NOT mapped. Grok scopes its hooks per session and a
+# SUBAGENT is a session: when one finishes, grok fires SessionEnd carrying the
+# subagent's id and its own transcript, not the main session's. bmad-loop's
+# generic adapter reads any SessionEnd as proof the CLI died and returns
+# "crashed" unconditionally (adapters/generic.py:1067), so it kills a healthy
+# session mid-work. Seen here on run 20260914-200514-d334: session 2-dev-2-g1
+# opened as 01a0a33d-6242-77d3-a9cd-360be57379ff and was ended at 23:12:09 by a
+# SessionEnd carrying 01a0a33e-68db-7df3-900e-7e16cc3bb9df -- a subagent id, not
+# this session's. (That one scored `completed` only because a blocked artifact
+# was already on disk for the crash path to honor; in the My-Love repo the same
+# defect scored four sessions `crashed` and deferred a whole bundle.)
+# The adapter has this guard for Copilot but only on Stop, keyed on an EMPTY
+# transcript_path (generic.py:1002-1013); grok's subagent SessionEnd carries a
+# real one, so that filter cannot catch it.
+#
+# Unmapped, the relay is never registered for the event and no SessionEnd file
+# is ever written, which puts grok on the same footing as Codex: a real death is
+# caught by the window-death probe instead (generic.py:915-925, "died without a
+# SessionEnd hook"), ~5s later rather than instantly. That is the whole cost.
+# Do not re-add SessionEnd without first confirming grok stopped firing it for
+# subagents (verified against grok 1.0.30).
 [hooks]
 dialect = "claude-settings-json"
 config_path = ".grok/hooks/bmad-loop.json"
-events = { SessionStart = "SessionStart", Stop = "Stop", SessionEnd = "SessionEnd", PreCompact = "PreCompact" }
+events = { SessionStart = "SessionStart", Stop = "Stop", PreCompact = "PreCompact" }

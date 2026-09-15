@@ -46,7 +46,11 @@ export-docs.mjs
 
 # BMad workspace output
 _bmad/
-_bmad-output/
+# _bmad-output/ is local except specs/: bmad-loop mounts a fresh worktree for a
+# story re-drive and the re-driven session reads the COMMITTED spec, so an
+# uncommitted correction never reaches it.
+_bmad-output/*
+!_bmad-output/specs/
 
 # Archived doc scan-report snapshots
 docs/.archive/

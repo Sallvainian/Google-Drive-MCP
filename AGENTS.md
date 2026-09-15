@@ -11,8 +11,11 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 ## Policy
 
 - Never commit `credentials.json` or `token.json` — OAuth secrets, gitignored at `.gitignore:6-7`.
-- `.claude/` is tracked deliberately; `.grok/`, `.codex/`, `.cursor/`, `_bmad/` and
-  `_bmad-output/` stay ignored. This flipped across six commits — do not re-litigate it.
+- `.claude/` is tracked deliberately; `.grok/`, `.codex/`, `.cursor/` and `_bmad/` stay
+  ignored. This flipped across six commits — do not re-litigate it. `_bmad-output/` is
+  ignored. `_bmad-output/specs/` is un-ignored so a bmad-loop story re-drive can read its
+  COMMITTED spec from a fresh worktree, but those specs are NOT published: they index
+  unfixed findings by file and line, and this repo is public. Keep them local.
 
 ## Where things are
 
