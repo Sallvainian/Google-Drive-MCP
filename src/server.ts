@@ -47,6 +47,7 @@ import * as DriveHelpers from './googleDriveApiHelpers.js';
 import * as GmailHelpers from './googleGmailApiHelpers.js';
 import * as LabelManager from './gmailLabelManager.js';
 import * as FilterManager from './gmailFilterManager.js';
+import * as McpTransport from './mcpTransport.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
@@ -156,7 +157,10 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 const server = new FastMCP({
   name: 'Ultimate Google Docs & Sheets MCP Server',
-  version: '1.0.0'
+  version: '1.0.0',
+  ...(process.env.MCP_HTTP_TOKEN
+    ? { authenticate: McpTransport.createBearerAuthenticate(process.env.MCP_HTTP_TOKEN) }
+    : {}),
 });
 
 // --- Helper to get Docs client within tools ---
@@ -5975,18 +5979,8 @@ console.error("Starting Ultimate Google Docs, Sheets & Slides MCP server...");
       //   MCP_TRANSPORT=httpStream  → HTTP streaming (for remote hosting)
       //   unset / stdio            → stdio (default, spawned-by-client model)
       // When httpStream: MCP_PORT (default 8787) controls the listen port.
-      const useHttp = process.env.MCP_TRANSPORT === 'httpStream';
-      const httpPort = Number(process.env.MCP_PORT || 8787);
-      const configToUse = useHttp
-        ? { transportType: 'httpStream' as const, httpStream: { port: httpPort } }
-        : { transportType: 'stdio' as const };
-
-      server.start(configToUse);
-      if (useHttp) {
-        console.error(`MCP Server running on httpStream transport, port ${httpPort}. Endpoint: /mcp`);
-      } else {
-        console.error(`MCP Server running on stdio transport. Awaiting client connection...`);
-
+      await McpTransport.startConfiguredTransport(server, process.env, console.error);
+      if (process.env.MCP_TRANSPORT !== 'httpStream') {
         // Parent (Claude Code) closed the stdio pipe → no client left, exit cleanly.
         // Without this, orphaned servers stay alive forever after the parent dies.
         process.stdin.on('end', () => {
