@@ -813,50 +813,57 @@ export async function uploadImageToDrive(
         body: fs.createReadStream(localFilePath)
     };
 
-    const uploadResponse = await drive.files.create({
-        requestBody: fileMetadata,
-        media: media,
-        fields: 'id,webViewLink,webContentLink',
-        supportsAllDrives: true
-    });
-
-    const fileId = uploadResponse.data.id;
-    if (!fileId) {
-        throw new UserError('Failed to upload image to Drive - no file ID returned');
-    }
-
-    // Make the file publicly readable
-    const permissionResponse = await drive.permissions.create({
-        fileId: fileId,
-        requestBody: {
-            role: 'reader',
-            type: 'anyone'
-        },
-        fields: 'id',
-        supportsAllDrives: true
-    });
-
-    const permissionId = permissionResponse.data.id;
-    if (!permissionId) {
-        throw new UserError('Failed to upload image to Drive - no permission ID returned');
-    }
-
     try {
-        const fileInfo = await drive.files.get({
-            fileId: fileId,
-            fields: 'webContentLink',
+        const uploadResponse = await drive.files.create({
+            requestBody: fileMetadata,
+            media: media,
+            fields: 'id,webViewLink,webContentLink',
             supportsAllDrives: true
         });
 
-        const webContentLink = fileInfo.data.webContentLink;
-        if (!webContentLink) {
-            throw new UserError('Failed to get public URL for uploaded image');
+        const fileId = uploadResponse.data.id;
+        if (!fileId) {
+            throw new UserError('Failed to upload image to Drive - no file ID returned');
         }
 
-        return { fileId, webContentLink, permissionId };
-    } catch (getError) {
-        await revokeAnyoneReaderGrant(drive, fileId, permissionId);
-        throw getError;
+        // Make the file publicly readable
+        const permissionResponse = await drive.permissions.create({
+            fileId: fileId,
+            requestBody: {
+                role: 'reader',
+                type: 'anyone'
+            },
+            fields: 'id',
+            supportsAllDrives: true
+        });
+
+        const permissionId = permissionResponse.data.id;
+        if (!permissionId) {
+            throw new UserError('Failed to upload image to Drive - no permission ID returned');
+        }
+
+        try {
+            const fileInfo = await drive.files.get({
+                fileId: fileId,
+                fields: 'webContentLink',
+                supportsAllDrives: true
+            });
+
+            const webContentLink = fileInfo.data.webContentLink;
+            if (!webContentLink) {
+                throw new UserError('Failed to get public URL for uploaded image');
+            }
+
+            return { fileId, webContentLink, permissionId };
+        } catch (getError) {
+            await revokeAnyoneReaderGrant(drive, fileId, permissionId);
+            throw getError;
+        }
+    } catch (error: any) {
+        if (error instanceof UserError) throw error;
+        if (error.code === 404) throw new UserError('Drive file not found while uploading image.');
+        if (error.code === 403) throw new UserError('Permission denied while uploading image to Drive.');
+        throw new UserError(`Failed to upload image to Drive: ${error.message || 'Unknown error'}`);
     }
 }
 

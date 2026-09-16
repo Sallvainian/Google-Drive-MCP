@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const serverSrc = readFileSync(join(srcDir, 'server.ts'), 'utf8');
 const helpersSrc = readFileSync(join(srcDir, 'googleDocsApiHelpers.ts'), 'utf8');
-const combinedSrc = `${helpersSrc}\n${serverSrc}`;
+const driveHelpersSrc = readFileSync(join(srcDir, 'googleDriveApiHelpers.ts'), 'utf8');
+const combinedSrc = `${helpersSrc}\n${driveHelpersSrc}\n${serverSrc}`;
 
 function skipWsAndComments(source, i) {
   while (i < source.length) {
@@ -250,5 +251,7 @@ describe('shared-drive flags', () => {
     assert.doesNotMatch(serverSrc, /\bdriveId\b/);
     assert.doesNotMatch(helpersSrc, /\bcorpora\b/);
     assert.doesNotMatch(helpersSrc, /\bdriveId\b/);
+    assert.doesNotMatch(driveHelpersSrc, /\bcorpora\b/);
+    assert.doesNotMatch(driveHelpersSrc, /\bdriveId\b/);
   });
 });

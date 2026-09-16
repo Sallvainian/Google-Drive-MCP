@@ -692,7 +692,7 @@ export async function searchMessages(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new UserError(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 

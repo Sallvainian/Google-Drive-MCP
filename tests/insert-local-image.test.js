@@ -222,18 +222,17 @@ describe('insertLocalImageFromPath', () => {
   });
 
   it('revokes the grant when files.get fails after the grant', async () => {
-    const getError = { code: 500, message: 'backend' };
     const { drive, docs } = makeStubs({
       get: () => {
-        throw getError;
+        throw { code: 500, message: 'backend' };
       },
     });
 
     await assert.rejects(
       () => insertLocalImageFromPath(docs, drive, pngPath, 'doc1', 1),
       (error) => {
-        assert.strictEqual(error, getError);
-        assert.equal(error instanceof UserError, false);
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Failed to upload image to Drive: backend');
         return true;
       }
     );
@@ -242,6 +241,78 @@ describe('insertLocalImageFromPath', () => {
       permissionId: 'anyoneWithLink',
       supportsAllDrives: true,
     });
+  });
+
+  it('throws UserError when files.create returns 500 and does not grant', async () => {
+    const { drive, docs } = makeStubs({
+      create: () => {
+        throw { code: 500, message: 'backend' };
+      },
+    });
+
+    await assert.rejects(
+      () => insertLocalImageFromPath(docs, drive, pngPath, 'doc1', 1),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Failed to upload image to Drive: backend');
+        return true;
+      }
+    );
+    assert.strictEqual(drive.permissions.create.mock.calls.length, 0);
+    assert.strictEqual(drive.permissions.delete.mock.calls.length, 0);
+  });
+
+  it('throws UserError when files.create returns 404', async () => {
+    const { drive, docs } = makeStubs({
+      create: () => {
+        throw { code: 404, message: 'not found' };
+      },
+    });
+
+    await assert.rejects(
+      () => insertLocalImageFromPath(docs, drive, pngPath, 'doc1', 1),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Drive file not found while uploading image.');
+        return true;
+      }
+    );
+  });
+
+  it('throws UserError when permissions.create returns 403', async () => {
+    const { drive, docs } = makeStubs({
+      permissionCreate: () => {
+        throw { code: 403, message: 'forbidden' };
+      },
+    });
+
+    await assert.rejects(
+      () => insertLocalImageFromPath(docs, drive, pngPath, 'doc1', 1),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Permission denied while uploading image to Drive.');
+        return true;
+      }
+    );
+    assert.strictEqual(drive.permissions.delete.mock.calls.length, 0);
+  });
+
+  it('throws UserError when permissions.create returns 500 and does not revoke', async () => {
+    const { drive, docs } = makeStubs({
+      permissionCreate: () => {
+        throw { code: 500, message: 'backend' };
+      },
+    });
+
+    await assert.rejects(
+      () => insertLocalImageFromPath(docs, drive, pngPath, 'doc1', 1),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Failed to upload image to Drive: backend');
+        return true;
+      }
+    );
+    assert.strictEqual(drive.permissions.delete.mock.calls.length, 0);
   });
 
   it('revokes the grant when webContentLink is missing after the grant', async () => {

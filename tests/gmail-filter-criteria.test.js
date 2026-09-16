@@ -1,5 +1,5 @@
 // tests/gmail-filter-criteria.test.js
-import { createFilter } from '../dist/gmailFilterManager.js';
+import { createFilter, getFilter, listFilters } from '../dist/gmailFilterManager.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
@@ -140,6 +140,101 @@ describe('createFilter positive matcher', () => {
     assert.strictEqual(gmail.users.settings.filters.create.mock.calls.length, 0);
   });
 
+  it('should keep size 0 and false booleans from createFilter response mapping', async () => {
+    const gmail = {
+      users: {
+        settings: {
+          filters: {
+            create: mock.fn(async () => ({
+              data: {
+                id: 'f1',
+                criteria: {
+                  from: 'alice@example.com',
+                  hasAttachment: false,
+                  excludeChats: false,
+                  size: 0,
+                },
+                action: { addLabelIds: ['STARRED'] },
+              },
+            })),
+          },
+        },
+      },
+    };
+
+    const result = await createFilter(
+      gmail,
+      { from: 'alice@example.com', hasAttachment: false, excludeChats: false, size: 0 },
+      { addLabelIds: ['STARRED'] }
+    );
+
+    assert.strictEqual(result.criteria.size, 0);
+    assert.strictEqual(result.criteria.hasAttachment, false);
+    assert.strictEqual(result.criteria.excludeChats, false);
+  });
+});
+
+describe('filter criteria 0/false mapping on get and list', () => {
+  const criteria = {
+    from: 'alice@example.com',
+    hasAttachment: false,
+    excludeChats: false,
+    size: 0,
+  };
+
+  it('should keep size 0 and false booleans from getFilter', async () => {
+    const gmail = {
+      users: {
+        settings: {
+          filters: {
+            get: mock.fn(async () => ({
+              data: {
+                id: 'f1',
+                criteria,
+                action: { addLabelIds: ['STARRED'] },
+              },
+            })),
+          },
+        },
+      },
+    };
+
+    const result = await getFilter(gmail, 'f1');
+    assert.strictEqual(result.criteria.size, 0);
+    assert.strictEqual(result.criteria.hasAttachment, false);
+    assert.strictEqual(result.criteria.excludeChats, false);
+  });
+
+  it('should keep size 0 and false booleans from listFilters', async () => {
+    const gmail = {
+      users: {
+        settings: {
+          filters: {
+            list: mock.fn(async () => ({
+              data: {
+                filter: [
+                  {
+                    id: 'f1',
+                    criteria,
+                    action: { addLabelIds: ['STARRED'] },
+                  },
+                ],
+              },
+            })),
+          },
+        },
+      },
+    };
+
+    const result = await listFilters(gmail);
+    assert.strictEqual(result.length, 1);
+    assert.strictEqual(result[0].criteria.size, 0);
+    assert.strictEqual(result[0].criteria.hasAttachment, false);
+    assert.strictEqual(result[0].criteria.excludeChats, false);
+  });
+});
+
+describe('createFilter positive matcher leftovers', () => {
   it('should throw UserError for excludeChats true only', async () => {
     const gmail = stubGmail();
 
