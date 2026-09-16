@@ -4625,8 +4625,8 @@ server.addTool({
         cc: formatted.cc,
         subject: formatted.subject,
         date: formatted.date,
-        snippet: formatted.snippet,
-        body: formatted.body,
+        snippet: GmailHelpers.wrapUntrustedContent(formatted.snippet),
+        body: GmailHelpers.wrapUntrustedContent(formatted.body),
         hasHtmlBody: !!formatted.htmlBody,
         attachments: formatted.attachments,
         labels: formatted.labelIds,
@@ -4666,7 +4666,7 @@ server.addTool({
           from: headers['from'],
           subject: headers['subject'] || '(No Subject)',
           date: headers['date'],
-          snippet: msg.snippet,
+          snippet: GmailHelpers.wrapUntrustedContent(msg.snippet),
           labels: msg.labelIds,
         };
       });
@@ -5125,8 +5125,8 @@ server.addTool({
           to: formatted.to,
           subject: formatted.subject,
           date: formatted.date,
-          snippet: formatted.snippet,
-          body: formatted.body,
+          snippet: GmailHelpers.wrapUntrustedContent(formatted.snippet),
+          body: GmailHelpers.wrapUntrustedContent(formatted.body),
           attachments: formatted.attachments.length,
         };
       });
