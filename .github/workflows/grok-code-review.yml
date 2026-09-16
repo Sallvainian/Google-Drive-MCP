@@ -1,0 +1,339 @@
+name: Grok Code Review
+
+# Stand-in for claude-code-review.yml while Claude Code usage is exhausted.
+# Same review prompt and sticky-comment contract; the posting step is ours
+# because xAI has no official GitHub Action equivalent of
+# anthropics/claude-code-action. Auth is GROK_AUTH_JSON (SuperGrok session)
+# or XAI_API_KEY (console.x.ai). Prefer GROK_AUTH_JSON so this bills against
+# the Grok Build subscription rather than API credits.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: grok-code-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  grok-review:
+    # Same skip rules as claude-code-review.yml: drafts, already-merged PRs,
+    # and bot authors except claude[bot].
+    if: |
+      !github.event.pull_request.draft &&
+      !github.event.pull_request.merged &&
+      (github.event.pull_request.user.type != 'Bot' ||
+       github.event.pull_request.user.login == 'claude[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GROK_DISABLE_AUTOUPDATER: '1'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # The review agent's tool allowlist has no network to the npm registry, so
+      # `npm ci` can never succeed once the agent is running. Install and build
+      # here, where the runner has network — tests import from `dist/`, which is
+      # gitignored, so a fresh checkout has nothing to run against until `tsc`.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Grok CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.30
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.grok/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"
+          grok --version
+
+      - name: Authenticate Grok
+        id: auth
+        env:
+          GROK_AUTH_JSON: ${{ secrets.GROK_AUTH_JSON }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.grok"
+          if [ -n "${GROK_AUTH_JSON:-}" ]; then
+            printf '%s' "$GROK_AUTH_JSON" > "$HOME/.grok/auth.json"
+            chmod 600 "$HOME/.grok/auth.json"
+            jq empty "$HOME/.grok/auth.json"
+            echo "Authenticated with GROK_AUTH_JSON"
+          elif [ -n "${XAI_API_KEY:-}" ]; then
+            echo "Authenticated with XAI_API_KEY"
+          elif [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "Skipping review: fork PRs do not receive repository secrets."
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          else
+            echo "::error::Add a GROK_AUTH_JSON or XAI_API_KEY repository secret. GROK_AUTH_JSON is the contents of ~/.grok/auth.json after \`grok login\`; XAI_API_KEY is from https://console.x.ai."
+            exit 1
+          fi
+
+      - name: Write review prompt
+        if: success() && steps.auth.outputs.skipped != 'true'
+        env:
+          PROMPT_PATH: ${{ runner.temp }}/grok-review-prompt.md
+        run: |
+          cat > "$PROMPT_PATH" <<'PROMPT'
+          REPO: ${{ github.repository }}
+          PR NUMBER: ${{ github.event.pull_request.number }}
+
+          You are a code review agent. You always deliver exactly one comment
+          containing the complete review — never a running commentary spread
+          across several. Be terse: report what matters and nothing else.
+
+          Review only what this PR changes; read surrounding code only to judge
+          impact. Do not use `git commit` or `git push`. Do not edit files,
+          approve the PR, or request changes. Print the entire review as your
+          final answer and nothing else. The workflow posts that text as one
+          sticky PR comment after you exit.
+
+          ## Before reviewing
+
+          1. Read `AGENTS.md`. It is the authoritative statement of this repo's
+             policy, layout, conventions and known pitfalls. The checklist below
+             is an index into it, not a replacement — where the two disagree,
+             `AGENTS.md` wins.
+          2. Run `gh pr diff ${{ github.event.pull_request.number }}` to get the full diff.
+          3. Check if the diff ONLY contains lockfiles, markdown, version bumps or
+             auto-generated files. If so, skip the review entirely and make your
+             comment read exactly: "No reviewable changes."
+          4. This workflow re-runs on every push. Your comment is reused and rewritten
+             in place, so write it as a complete standalone review of the CURRENT diff —
+             not a delta against your last one. If something you previously flagged is
+             now fixed, simply drop it rather than narrating the change.
+
+          ## Filter gate (2-of-4 rule)
+
+          Only report a finding if AT LEAST TWO of these criteria are met:
+          - You can quote the exact violated line from `AGENTS.md`, naming its section
+          - The finding is introduced in THIS PR's diff (not pre-existing code)
+          - It will cause incorrect runtime behavior, a bug, or a security vulnerability
+          - It is objectively wrong (not a style preference)
+
+          This gate governs the WHOLE review, not the Issues Found section alone.
+          If fewer than two criteria are met, drop the finding entirely — delete it.
+          Do NOT demote it to Suggestions. Suggestions is not the overflow bin for
+          findings that failed this gate; it carries its own additional bar, below.
+
+          `AGENTS.md` deliberately names code that ALREADY violates its own rules —
+          the 26 `console.log()` calls in the Docs and Slides helpers, the three
+          helpers that throw `NotImplementedError`, the inconsistent indentation in
+          `src/server.ts`. That is documentation of known debt, not a work list.
+          Report it only if THIS diff touches that code and leaves it worse. Opening
+          a review by relisting it is a failed review.
+
+          ## Project-specific checks
+
+          Run these first — they are where real bugs in this repo live. Each line
+          indexes a rule in `AGENTS.md`; read the full statement there before
+          reporting against it.
+
+          1. **stdout is the MCP protocol.** Any new `console.log()` in `src/`
+             corrupts the stdio transport. `console.error()` only. The 26 existing
+             calls are known debt, not the local style.
+          2. **Tool return contract.** Every tool's `execute` must return a `string`.
+             Returning an object is a bug. Errors the model should see are thrown as
+             `UserError` (FastMCP); a plain `Error` is for internal faults only.
+          3. **Auth fallback paths.** `src/auth.ts` falls through to `token.json`
+             only for the recoverable errors listed at `auth.ts:76-83` and throws on
+             anything else; an account mismatch skips straight to interactive OAuth.
+             All three paths are deliberate — flag a diff that collapses them.
+          4. **Account pinning.** `enforceRequiredAccount()` runs at two sites and
+             `auth.ts:314` fires before the token is written. That ordering is what
+             stops a wrong-account login reaching `token.json` and keeps the Personal
+             and Work instances apart. Flag anything that bypasses or reorders it.
+          5. **Process handlers.** No competing `uncaughtException` /
+             `unhandledRejection` handlers and no duplicate
+             `installTokenRefreshListener()`. The deliberate exits (dead stdio, a
+             rejection storm) are not bugs.
+          6. **Batch index drift.** Batch updates over 50 requests are split and run
+             sequentially, and document indices shift between batches. Requests must
+             be built against the state the batch will actually see.
+          7. **Download fallback.** `downloadFile` retries through
+             `exportViaWebUrl()` on any 403 from `files.export`. Flag a new export
+             path that skips that fallback.
+          8. **Index bases differ per API.** Docs is 1-based, Sheets 0-based, Slides
+             positions are points (72pt = 1 inch). Mixing them is a real bug.
+          9. **Imports and build.** Relative imports carry `.js` even from `.ts`
+             (NodeNext). Google clients initialize lazily via `getDocsClient()` and
+             siblings, never at module load.
+          10. **Secrets and tooling.** `credentials.json` and `token.json` must never
+              be committed. No linter or formatter is configured — do not suggest
+              adding one, and do not flag reformatting of a file the diff touches.
+
+          ## General checks
+
+          Then, subject to the same filter gate:
+          - **Bugs**: Logic errors, race conditions, null/undefined access, off-by-one errors
+          - **Security**: Injection, auth bypasses, exposed secrets, path traversal in
+            download and upload paths, missing input validation
+          - **API misuse**: Google API calls with wrong field masks, unhandled error
+            codes, quota-sensitive loops
+          - **Schemas**: Zod schemas that no longer match what the tool actually accepts
+
+          ## Output Format
+
+          Print the ENTIRE review as your final answer. Do not call `gh pr comment`
+          or `gh api` — the workflow posts stdout as one sticky comment. Never post
+          inline comments. Never split findings across several comments.
+
+          Use this structure, omitting any section that would be empty:
+
+          **Summary** — one or two sentences on what this PR changes.
+
+          **Issues Found** — problems that passed the filter gate above. For each:
+          `path/to/file.ts:42` — what is wrong, and the fix. Include a suggestion
+          block where a one-click fix is possible. Order by user impact, highest
+          first.
+
+          **Suggestions** — non-blocking improvements, same `file:line` format. A
+          suggestion must pass the filter gate above AND clear both of these:
+
+          - **Reachable today.** The condition must be reachable from code that
+            exists in the repo right now. If it only manifests once a config value
+            is changed, a `null` is replaced with a real value, or a caller that
+            has not been written yet appears, it is not reachable — drop it.
+            Catching yourself writing "unreachable today, but…", "harmless while
+            nothing calls this", or "once X is set to a real value" IS the signal
+            to drop it, not a caveat to ship alongside it.
+          - **Named user consequence.** Say what a person using this MCP server
+            experiences differently — which tool call fails, returns the wrong
+            thing, or stops being callable. If you cannot name that, it is not a
+            suggestion. Internal consistency, stale or inaccurate comments, naming,
+            and scope-creep observations never clear this bar on their own.
+
+          Order suggestions by user impact, highest first. There is no cap: every
+          suggestion clearing both bars belongs in the list, however many that is.
+
+          **Minor** — at most ONE line, total, for findings that pass the filter
+          gate but name no user consequence (wrong comments, internal
+          inconsistency, scope creep). Bare `file:line` references, a few words
+          each. Omit the section entirely rather than padding it out.
+
+          **Verdict** — a single line stating whether anything blocks merge.
+
+          If nothing passed the filter gate, the whole comment is the Summary plus
+          `**Verdict** — no blocking issues.`
+
+          ## FORBIDDEN
+
+          - Praise or compliments ("Great job!", "Nice work on this!")
+          - Open-ended questions ("Have you considered...?")
+          - Emojis
+          - Style preferences (naming, formatting) — there is no linter here by design
+          - Commenting on code outside the PR diff
+          - Suggesting tests unless a bug is found that tests would catch
+          - Documentation suggestions unless a public API changed
+          - Relisting the pre-existing violations `AGENTS.md` already documents
+          - Editing files, committing, pushing, approving, or requesting changes
+          PROMPT
+
+      - name: Run Grok Code Review
+        if: success() && steps.auth.outputs.skipped != 'true'
+        id: grok-review
+        env:
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          PROMPT_PATH: ${{ runner.temp }}/grok-review-prompt.md
+          WORK: ${{ runner.temp }}/grok-review
+        run: |
+          set -euo pipefail
+          mkdir -p "$WORK"
+
+          set +e
+          grok --prompt-file "$PROMPT_PATH" \
+            --output-format json \
+            --permission-mode dontAsk \
+            --tools "read_file,grep,list_dir,run_terminal_cmd" \
+            --allow "Bash(gh pr diff:*)" \
+            --allow "Bash(gh pr view:*)" \
+            --allow "Bash(npm ci:*)" \
+            --allow "Bash(npm run build:*)" \
+            --allow "Bash(node --test tests/*.test.js:*)" \
+            --no-plan \
+            --no-subagents \
+            --disable-web-search \
+            --no-auto-update \
+            --no-alt-screen \
+            --max-turns 50 \
+            -m grok-4.6 \
+            --cwd "$GITHUB_WORKSPACE" \
+            > "$WORK/grok-output.json" \
+            2> "$WORK/grok-stderr.log"
+          echo "$?" > "$WORK/grok-exit"
+          set -e
+
+          EXIT=$(cat "$WORK/grok-exit")
+          echo "grok exit code: $EXIT"
+          if [ "$EXIT" != "0" ]; then
+            echo "::error::Grok CLI failed with exit $EXIT"
+            tail -n 80 "$WORK/grok-stderr.log" || true
+            head -c 4000 "$WORK/grok-output.json" || true
+            exit 1
+          fi
+
+          if jq -e '.type == "error"' "$WORK/grok-output.json" >/dev/null 2>&1; then
+            echo "::error::Grok returned an error object: $(jq -r '.message' "$WORK/grok-output.json")"
+            tail -n 80 "$WORK/grok-stderr.log" || true
+            exit 1
+          fi
+
+          jq -r '.text // empty' "$WORK/grok-output.json" > "$WORK/review.md"
+          if [ ! -s "$WORK/review.md" ]; then
+            echo "::error::Grok produced an empty review."
+            tail -n 80 "$WORK/grok-stderr.log" || true
+            exit 1
+          fi
+
+      - name: Post sticky review comment
+        if: success() && steps.auth.outputs.skipped != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          WORK: ${{ runner.temp }}/grok-review
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          MARKER='<!-- grok-code-review -->'
+
+          COMMENT_ID=$(
+            gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq ".[] | select(.user.login==\"github-actions[bot]\" and (.body | contains(\"${MARKER}\"))) | .id" \
+              | awk 'NR==1 { print; exit }'
+          )
+
+          jq -n --rawfile review "$WORK/review.md" --arg marker "$MARKER" --arg run "$RUN_URL" \
+            '{body: ($marker + "\n\n" + $review + "\n\n---\n[Grok review run](" + $run + ")\n")}' \
+            > "$WORK/comment.json"
+
+          if [ -n "${COMMENT_ID:-}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" --input "$WORK/comment.json"
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input "$WORK/comment.json"
+          fi
+
+      - name: Cleanup Grok credentials
+        if: always()
+        run: rm -f "$HOME/.grok/auth.json"

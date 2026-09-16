@@ -95,3 +95,7 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
   in the Docs UI.
 
 <!-- /bmad:context -->
+
+## Review workflow (temporary)
+
+Claude Code review is paused (`claude-code-review.yml` starts with `false &&`) while usage is exhausted. The stand-in is `grok-code-review.yml`, which posts one sticky comment as `github-actions[bot]` and embeds `/actions/runs/<id>`. Exact-commit waiters: `claude_review_wait.py --workflow grok-code-review.yml --bot github-actions[bot]`. Restore Claude by deleting the `false &&` line.
