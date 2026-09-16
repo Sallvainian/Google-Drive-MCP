@@ -278,10 +278,10 @@ describe('createDocument and tab-targeted documents.get', () => {
       title: 'My Doc',
       initialContent: 'hello',
     });
-    assert.equal(typeof result, 'string');
-    assert.ok(result.includes('doc1'));
-    assert.ok(result.includes('https://docs.google.com/d/doc1'));
-    assert.ok(result.includes('Initial content added'));
+    assert.strictEqual(
+      result,
+      `Successfully created document "${CREATED_DOC.name}" (ID: ${CREATED_DOC.id})\nView Link: ${CREATED_DOC.webViewLink}\n\nInitial content added to document.`
+    );
     assert.strictEqual(driveCreate.mock.calls.length, 1);
     assert.strictEqual(docsBatchUpdate.mock.calls.length, 1);
     assert.strictEqual(driveDelete.mock.calls.length, 0);
