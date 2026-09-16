@@ -30,8 +30,9 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 
 ## Running and verifying
 
-- Build first — `npm run build`. Tests import from `dist/`, which is gitignored, so a
-  fresh clone has nothing to run against.
+- Tests import from `dist/`, which is gitignored. `npm test` runs a `pretest` hook
+  (`tsc`) first, so a fresh clone compiles `dist/` before the suite imports it.
+  `npm run build` is still `tsc` for a standalone compile.
 - `npm test` runs the suite — the script is `node --test tests/*.test.js`. It used to be
   `node --test tests/`, which Node 24 resolves as a module and fails with
   MODULE_NOT_FOUND; the script itself was fixed, so no workaround is needed.
@@ -43,8 +44,8 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
   `npm test`, then the token-cost gate (`scripts/measure-token-cost.py` plus
   `scripts/check-token-budget.js`) under Node 24. The two Claude workflows still
   only invoke `anthropics/claude-code-action@v1` after `npm ci`; they are not the gate.
-- No Node version is declared (no `engines`, no `.nvmrc`). README says 18+; both CI
-  workflows pin Node 24.
+- `package.json` declares `"engines": { "node": ">=22" }`, matching README 22+. There is
+  no `.nvmrc`. Both CI workflows pin Node 24.
 
 ## Conventions that differ from defaults
 
