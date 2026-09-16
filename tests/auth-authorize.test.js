@@ -66,10 +66,11 @@ function httpGet(port, requestPath, hostname = '127.0.0.1', timeoutMs = 3000) {
 // Returns the hostname that reaches THIS flow's callback listener.
 //
 // "Does anything answer on the port?" is not a sufficient readiness probe. Port 3000 is a
-// common dev-server port, authenticate() calls server.listen(port) without a host, and
-// localhost may resolve to either family — so a foreign occupant can answer the probe and
-// every assertion below would then run against that service instead of the OAuth
-// listener. Identify the responder before trusting it.
+// common dev-server port, authenticate() binds the callback to the redirect host
+// (localhost / 127.0.0.1 / ::1) rather than every interface, and localhost may resolve
+// to either family — so a foreign occupant can answer the probe and every assertion
+// below would then run against that service instead of the OAuth listener. Identify the
+// responder before trusting it.
 async function waitForOwnListener(port, timeoutMs = 8000) {
   const start = Date.now();
   const hosts = ['127.0.0.1', '::1', 'localhost'];

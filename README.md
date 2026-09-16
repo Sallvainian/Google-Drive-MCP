@@ -196,7 +196,7 @@ Now you need to run the server once manually to grant it permission to access yo
     - "Token stored to .../token.json"
     - It will then finish starting and likely print "Awaiting MCP client connection via stdio..." or similar, and then exit (or you can press `Ctrl+C` to stop it).
 8.  ✅ **Check:** You should now see a new file named `token.json` in your `mcp-googledocs-server` folder.
-9.  ⚠️ **SECURITY WARNING:** This `token.json` file contains the key that allows the server to access your Google account _without_ asking again. Protect it like a password. **Do not commit it to GitHub.** The included `.gitignore` file should prevent this automatically.
+9.  ⚠️ **SECURITY WARNING:** This `token.json` file contains the key that allows the server to access your Google account _without_ asking again. Protect it like a password. It is created with file mode `0600` (owner read/write only). **Do not commit it to GitHub.** The included `.gitignore` file should prevent this automatically. To skip the file after the first login, set `GOOGLE_REFRESH_TOKEN` to the `refresh_token` field in `token.json`.
 
 ### Alternative: Service Account with Domain-Wide Delegation (Enterprise)
 
@@ -404,7 +404,7 @@ Uploads a local image file to Google Drive and inserts it into the document. Thi
 ## Security & Token Storage
 
 - **`.gitignore`:** This repository includes a `.gitignore` file which should prevent you from accidentally committing your sensitive `credentials.json` and `token.json` files. **Do not remove these lines from `.gitignore`**.
-- **Token Storage:** This server stores the Google authorization token (`token.json`) directly in the project folder for simplicity during setup. In production or more security-sensitive environments, consider storing this token more securely, such as using system keychains, encrypted files, or dedicated secret management services.
+- **Token Storage:** After OAuth, the server writes `token.json` in the project folder with file mode `0600` (owner read/write only). Protect it like a password. **Do not commit it to GitHub.** To use environment variables instead of the file, set `GOOGLE_REFRESH_TOKEN` to the `refresh_token` field in `token.json` (along with `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`). In production or more security-sensitive environments, consider a system keychain, encrypted file, or dedicated secret manager.
 
 ---
 

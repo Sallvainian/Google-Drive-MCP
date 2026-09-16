@@ -2526,6 +2526,7 @@ try {
       }
     }
 
+    GmailHelpers.assertDestinationNotSymlink(localFilePath);
     fs.writeFileSync(localFilePath, buffer);
     return `Successfully downloaded "${originalName}" (exported as ${exportConfig.extension})\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
   } else {
@@ -2549,6 +2550,7 @@ try {
     });
 
     const buffer = Buffer.from(response.data as ArrayBuffer);
+    GmailHelpers.assertDestinationNotSymlink(localFilePath);
     fs.writeFileSync(localFilePath, buffer);
 
     return `Successfully downloaded "${originalName}"\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;

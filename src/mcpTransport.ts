@@ -18,9 +18,9 @@ export function resolveHttpStreamBind(env: NodeJS.Dict<string>): {
     throw new UserError('MCP_PORT must be an integer between 1 and 65535.');
   }
 
-  if (!isLoopbackHost(host) && !token) {
+  if (!isLoopbackHost(host)) {
     throw new UserError(
-      'MCP_HOST is not loopback; set MCP_HTTP_TOKEN to bind a non-loopback interface.',
+      'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
     );
   }
 

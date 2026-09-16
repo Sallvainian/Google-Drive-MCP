@@ -7,12 +7,14 @@ import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -126,6 +128,53 @@ describe('download path containment', () => {
     const result = await downloadAttachment(stubGmail(), 'msg1', 'att1', savePath, 'report.pdf', true);
     assert.strictEqual(result.savedTo, resolve(savePath, 'report.pdf'));
     assert.strictEqual(readFileSync(dest, 'utf8'), 'x');
+  });
+
+  it('refuses a dangling symlink destination even when overwrite is true', async () => {
+    const dest = join(savePath, 'report.pdf');
+    const outside = join(tmpRoot, 'pwned');
+    symlinkSync(outside, dest);
+    const assertSymlinkError = (error) => {
+      assert.ok(error instanceof UserError);
+      assert.ok(error.message.startsWith('Refusing to write through a symlink:'));
+      return true;
+    };
+    await assert.rejects(
+      () => downloadAttachment(stubGmail(), 'msg1', 'att1', savePath, 'report.pdf'),
+      assertSymlinkError
+    );
+    await assert.rejects(
+      () => downloadAttachment(stubGmail(), 'msg1', 'att1', savePath, 'report.pdf', true),
+      assertSymlinkError
+    );
+    assert.throws(
+      () => resolveSafeDownloadPath(savePath, 'report.pdf', true),
+      assertSymlinkError
+    );
+    assert.ok(lstatSync(dest).isSymbolicLink());
+    assert.equal(existsSync(outside), false);
+  });
+
+  it('refuses a live symlink so overwrite cannot truncate the target', async () => {
+    const dest = join(savePath, 'report.pdf');
+    const outside = join(tmpRoot, 'pwned');
+    writeFileSync(outside, 'secret');
+    symlinkSync(outside, dest);
+    const assertSymlinkError = (error) => {
+      assert.ok(error instanceof UserError);
+      assert.ok(error.message.startsWith('Refusing to write through a symlink:'));
+      return true;
+    };
+    await assert.rejects(
+      () => downloadAttachment(stubGmail(), 'msg1', 'att1', savePath, 'report.pdf', true),
+      assertSymlinkError
+    );
+    assert.throws(
+      () => resolveSafeDownloadPath(savePath, 'report.pdf', true),
+      assertSymlinkError
+    );
+    assert.strictEqual(readFileSync(outside, 'utf8'), 'secret');
+    assert.ok(lstatSync(dest).isSymbolicLink());
   });
 
   it('keeps the default attachment name inside savePath', async () => {

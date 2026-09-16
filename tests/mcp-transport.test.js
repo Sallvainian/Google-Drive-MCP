@@ -61,12 +61,21 @@ describe('resolveHttpStreamBind', () => {
   });
 
   it('Non-loopback with token', () => {
-    const bind = resolveHttpStreamBind({
-      MCP_HOST: '0.0.0.0',
-      MCP_HTTP_TOKEN: 'secret',
-    });
-    assert.strictEqual(bind.host, '0.0.0.0');
-    assert.strictEqual(bind.token, 'secret');
+    assert.throws(
+      () =>
+        resolveHttpStreamBind({
+          MCP_HOST: '0.0.0.0',
+          MCP_HTTP_TOKEN: 'secret',
+        }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
+        return true;
+      },
+    );
   });
 
   it('Non-loopback without token', () => {
@@ -76,7 +85,7 @@ describe('resolveHttpStreamBind', () => {
         assert.ok(error instanceof UserError);
         assert.strictEqual(
           error.message,
-          'MCP_HOST is not loopback; set MCP_HTTP_TOKEN to bind a non-loopback interface.',
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
         );
         return true;
       },
@@ -270,19 +279,29 @@ describe('startConfiguredTransport', () => {
     assert.strictEqual(calls[0].httpStream.host, 'localhost');
   });
 
-  it('httpStream non-loopback with token reaches start', async () => {
+  it('httpStream non-loopback with token does not start', async () => {
     const { calls, server } = mockStartServer();
-    await startConfiguredTransport(
-      server,
-      {
-        MCP_TRANSPORT: 'httpStream',
-        MCP_HOST: '0.0.0.0',
-        MCP_HTTP_TOKEN: 'secret',
+    await assert.rejects(
+      () =>
+        startConfiguredTransport(
+          server,
+          {
+            MCP_TRANSPORT: 'httpStream',
+            MCP_HOST: '0.0.0.0',
+            MCP_HTTP_TOKEN: 'secret',
+          },
+          () => {},
+        ),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
+        assert.strictEqual(calls.length, 0);
+        return true;
       },
-      () => {},
     );
-    assert.strictEqual(calls.length, 1);
-    assert.strictEqual(calls[0].httpStream.host, '0.0.0.0');
   });
 
   it('httpStream non-loopback without token does not start', async () => {
@@ -296,6 +315,10 @@ describe('startConfiguredTransport', () => {
         ),
       (error) => {
         assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
         assert.strictEqual(calls.length, 0);
         return true;
       },

@@ -222,10 +222,28 @@ export async function saveCredentials(client: OAuth2Client): Promise<void> {
   }
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function oauthListenHost(redirectHostname: string): string {
+  if (redirectHostname === '::1') return '::1';
+  if (redirectHostname === 'localhost') return 'localhost';
+  return '127.0.0.1';
+}
+
 export function listenForOAuthCode(
   expectedState: string,
-  port: number = 3000
+  port: number = 3000,
+  options: { host?: string; callbackPath?: string } = {}
 ): { code: Promise<string>; listening: Promise<number>; close: () => void } {
+  const host = options.host ?? '127.0.0.1';
+  const callbackPath = options.callbackPath || '/';
   let closeFn = () => {};
   let listeningSettled = false;
   let resolveListening: (boundPort: number) => void = () => {};
@@ -240,13 +258,18 @@ export function listenForOAuthCode(
     let timeoutHandle: NodeJS.Timeout;
     const server = http.createServer((req, res) => {
       try {
-        const reqUrl = new URL(req.url || '', `http://localhost:${port}`);
+        const reqUrl = new URL(req.url || '', 'http://127.0.0.1');
+        if (reqUrl.pathname !== callbackPath) {
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end();
+          return;
+        }
         const receivedCode = reqUrl.searchParams.get('code');
         const error = reqUrl.searchParams.get('error');
 
         if (error) {
           res.writeHead(400, { 'Content-Type': 'text/html' });
-          res.end(`<html><body><h1>Authorization Failed</h1><p>Error: ${error}</p><p>You can close this window.</p></body></html>`);
+          res.end(`<html><body><h1>Authorization Failed</h1><p>Error: ${escapeHtml(error)}</p><p>You can close this window.</p></body></html>`);
           settle('reject', new Error(`Authorization error: ${error}`));
           return;
         }
@@ -293,10 +316,10 @@ export function listenForOAuthCode(
       settle('reject', new Error('Authentication timed out after 5 minutes'));
     }, 5 * 60 * 1000);
 
-    server.listen(port, () => {
+    server.listen(port, host, () => {
       const address = server.address();
       const boundPort = typeof address === 'object' && address !== null ? address.port : port;
-      console.error(`Local server listening on port ${boundPort}...`);
+      console.error(`Local server listening on ${host}:${boundPort}...`);
       if (!listeningSettled) {
         listeningSettled = true;
         resolveListening(boundPort);
@@ -326,6 +349,7 @@ async function authenticate(): Promise<OAuth2Client> {
   // For web clients, use the configured redirect URI
   const PORT = 3000;
   const redirectUri = client_type === 'web' ? redirect_uris[0] : `http://localhost:${PORT}`;
+  const redirectUrl = new URL(redirectUri);
   const oAuth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
 
   const authUrlOptions: Parameters<typeof oAuth2Client.generateAuthUrl>[0] = {
@@ -349,7 +373,10 @@ async function authenticate(): Promise<OAuth2Client> {
 
   // For installed apps, start local server to capture the code
   if (client_type !== 'web') {
-    const waiter = listenForOAuthCode(state, PORT);
+    const waiter = listenForOAuthCode(state, PORT, {
+      host: oauthListenHost(redirectUrl.hostname),
+      callbackPath: redirectUrl.pathname || '/',
+    });
     void waiter.listening.then(() => {
       import('child_process').then(({ exec }) => {
         const platform = process.platform;

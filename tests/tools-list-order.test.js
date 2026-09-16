@@ -5,7 +5,7 @@ import {
   listToolsOverStdio,
 } from './live-fastmcp-helpers.js';
 import assert from 'node:assert';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -152,7 +152,9 @@ describe('tools/list registration order', () => {
 
   it('does not put ttlMs or cacheScope in src/', () => {
     for (const file of readdirSync(srcDir)) {
-      const source = readFileSync(join(srcDir, file), 'utf8');
+      const full = join(srcDir, file);
+      if (!statSync(full).isFile()) continue;
+      const source = readFileSync(full, 'utf8');
       assert.equal(source.includes('ttlMs'), false, `${file} contains ttlMs`);
       assert.equal(source.includes('cacheScope'), false, `${file} contains cacheScope`);
     }

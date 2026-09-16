@@ -33,7 +33,8 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 - Tests import from `dist/`, which is gitignored. `npm test` runs a `pretest` hook
   (`tsc`) first, so a fresh clone compiles `dist/` before the suite imports it.
   `npm run build` is still `tsc` for a standalone compile.
-- `npm test` runs the suite — the script is `node --test tests/*.test.js`. It used to be
+- `npm test` runs the suite — the script is `node --test tests/*.test.js`. Invoking
+  that command directly skips pretest, so `dist/` must already exist. It used to be
   `node --test tests/`, which Node 24 resolves as a module and fails with
   MODULE_NOT_FOUND; the script itself was fixed, so no workaround is needed.
 - That suite is 45 tests and all 45 pass. The `tests/helpers.test.js` `fields` expectation
@@ -41,11 +42,13 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 - No linter or formatter is configured. Do not add one uninvited; there is no `lint` script.
 - `tsconfig.json` covers `src/**/*` only — `tests/` is never typechecked.
 - CI: `.github/workflows/ci.yml` on `pull_request` runs `npm ci`, `npm run build`,
-  `npm test`, then the token-cost gate (`scripts/measure-token-cost.py` plus
-  `scripts/check-token-budget.js`) under Node 24. The two Claude workflows still
-  only invoke `anthropics/claude-code-action@v1` after `npm ci`; they are not the gate.
+  `npm test` (`npm test` runs `tsc` again via pretest), then the token-cost gate
+  (`scripts/capture-tools-list.mjs` as the live ListTools input,
+  `scripts/measure-token-cost.py` plus `scripts/check-token-budget.js`) under
+  Node 24. The two Claude workflows still only invoke
+  `anthropics/claude-code-action@v1` after `npm ci`; they are not the gate.
 - `package.json` declares `"engines": { "node": ">=22" }`, matching README 22+. There is
-  no `.nvmrc`. Both CI workflows pin Node 24.
+  no `.nvmrc`. ci.yml, claude.yml, and claude-code-review.yml all pin Node 24.
 
 ## Conventions that differ from defaults
 
