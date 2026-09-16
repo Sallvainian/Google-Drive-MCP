@@ -236,7 +236,8 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         const res = await docs.documents.get({
             documentId: args.documentId,
             includeTabsContent: needsTabsContent,
-            fields: needsTabsContent ? '*' : fields, // Get full document if using tabs
+            suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
+            fields: needsTabsContent ? GDocsHelpers.TAB_READ_CONTENT_FIELDS : fields,
         });
         log.info(`Fetched doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 
@@ -370,10 +371,10 @@ execute: async (args, { log }) => {
     const res = await docs.documents.get({
       documentId: args.documentId,
       includeTabsContent: true,
-      // Only get essential fields for tab listing
+      suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
       fields: args.includeContent
-        ? 'title,tabs'  // Get all tab data if we need content summary
-        : 'title,tabs(tabProperties,childTabs)'  // Otherwise just structure
+        ? GDocsHelpers.TAB_LIST_WITH_CONTENT_FIELDS
+        : GDocsHelpers.TAB_LIST_FIELDS
     });
 
     const docTitle = res.data.title || 'Untitled Document';
@@ -421,9 +422,12 @@ execute: async (args, { log }) => {
         }
       }
 
-      // Optionally include content summary
+      // Optionally include content summary from last element's endIndex
+      // (the content mask only fetches endIndex, not textRun.content).
       if (args.includeContent && tab.documentTab) {
-        const textLength = GDocsHelpers.getTabTextLength(tab.documentTab);
+        const bodyContent = tab.documentTab.body?.content;
+        const lastEndIndex = bodyContent?.[bodyContent.length - 1]?.endIndex;
+        const textLength = lastEndIndex && lastEndIndex > 0 ? lastEndIndex - 1 : 0;
         const contentInfo = textLength > 0
           ? `${textLength.toLocaleString()} characters`
           : 'Empty';
@@ -464,30 +468,23 @@ const docs = await getDocsClient();
 log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 
     try {
-        // Determine if we need tabs content
-        const needsTabsContent = !!args.tabId;
-
-        // Get the current end index
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: needsTabsContent,
-            fields: needsTabsContent ? 'tabs' : 'body(content(endIndex)),documentStyle(pageSize)'
-        });
-
         let endIndex = 1;
         let bodyContent: any;
 
-        // If tabId is specified, find the specific tab
         if (args.tabId) {
-            const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-            if (!targetTab) {
-                throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-            }
-            if (!targetTab.documentTab) {
-                throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-            }
-            bodyContent = targetTab.documentTab.body?.content;
+            const targetTab = await GDocsHelpers.getDocumentTab(
+                docs,
+                args.documentId,
+                args.tabId,
+                GDocsHelpers.TAB_BODY_END_DOCUMENT_TAB_FIELDS
+            );
+            bodyContent = targetTab.documentTab?.body?.content;
         } else {
+            const docInfo = await docs.documents.get({
+                documentId: args.documentId,
+                suggestionsViewMode: 'PREVIEW_WITHOUT_SUGGESTIONS',
+                fields: 'body(content(endIndex)),documentStyle(pageSize)'
+            });
             bodyContent = docInfo.data.body?.content;
         }
 
@@ -537,19 +534,7 @@ const docs = await getDocsClient();
 log.info(`Inserting text in doc ${args.documentId} at index ${args.index}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
 try {
     if (args.tabId) {
-        // For tab-specific inserts, we need to verify the tab exists first
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: true,
-            fields: 'tabs(tabProperties,documentTab)'
-        });
-        const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-        if (!targetTab) {
-            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-        }
-        if (!targetTab.documentTab) {
-            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-        }
+        await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
 
         // Insert with tabId
         const location: any = { index: args.index, tabId: args.tabId };
@@ -619,20 +604,8 @@ if (args.endIndex <= args.startIndex) {
 throw new UserError("End index must be greater than start index for deletion.");
 }
 try {
-    // If tabId is specified, verify the tab exists
     if (args.tabId) {
-        const docInfo = await docs.documents.get({
-            documentId: args.documentId,
-            includeTabsContent: true,
-            fields: 'tabs(tabProperties,documentTab)'
-        });
-        const targetTab = GDocsHelpers.findTabById(docInfo.data, args.tabId);
-        if (!targetTab) {
-            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
-        }
-        if (!targetTab.documentTab) {
-            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
-        }
+        await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
     }
 
     const range: any = { startIndex: args.startIndex, endIndex: args.endIndex };
@@ -2716,13 +2689,20 @@ try {
       });
       result += `\n\nInitial content added to document.`;
     } catch (contentError: any) {
-      log.warn(`Document created but failed to add initial content: ${contentError.message}`);
-      result += `\n\nDocument created but failed to add initial content. You can add content manually.`;
+      const detail = contentError?.message || String(contentError);
+      log.error(`Document created but failed to add initial content: ${detail}`);
+      throw new UserError(
+        `Document "${document.name}" was created (id: ${document.id}, url: ${document.webViewLink}) ` +
+          `but inserting the initial content FAILED, so it is currently EMPTY. ` +
+          `Append the content to this existing document (do not create a new one). ` +
+          `Underlying error: ${detail}`
+      );
     }
   }
 
   return result;
 } catch (error: any) {
+  if (error instanceof UserError) throw error;
   log.error(`Error creating document: ${error.message || error}`);
   if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
   if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");

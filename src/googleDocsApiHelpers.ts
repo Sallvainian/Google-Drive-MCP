@@ -12,6 +12,45 @@ export const FIND_TEXT_RANGE_FIELDS = 'body(content(paragraph(elements(startInde
 export const GET_PARAGRAPH_RANGE_FIELDS = 'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))';
 export const GET_TABLE_CELL_RANGE_FIELDS = 'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex))))))))';
 
+export const SUGGESTIONS_VIEW_MODE = 'PREVIEW_WITHOUT_SUGGESTIONS' as const;
+export const TAB_ID_PROPERTIES = 'tabProperties(tabId)';
+export const TAB_LIST_PROPERTIES = 'tabProperties(tabId,title,index,parentTabId)';
+
+/**
+ * Builds a tabs field mask with 3-deep childTabs so findTabById can see nested tabs.
+ * @param documentTabFields - documentTab(...) subfields, e.g. 'documentTab(body(content(endIndex)))'
+ */
+export function buildTabsFieldMask(documentTabFields: string): string {
+  const child3 = `childTabs(${TAB_ID_PROPERTIES},${documentTabFields})`;
+  const child2 = `childTabs(${TAB_ID_PROPERTIES},${documentTabFields},${child3})`;
+  const child1 = `childTabs(${TAB_ID_PROPERTIES},${documentTabFields},${child2})`;
+  return `tabs(${TAB_ID_PROPERTIES},${documentTabFields},${child1})`;
+}
+
+export const TAB_BODY_RANGE_DOCUMENT_TAB_FIELDS = 'documentTab(body(content(startIndex,endIndex)))';
+export const TAB_BODY_END_DOCUMENT_TAB_FIELDS = 'documentTab(body(content(endIndex)))';
+export const TAB_VERIFY_DOCUMENT_TAB_FIELDS = TAB_BODY_END_DOCUMENT_TAB_FIELDS;
+export const TAB_READ_DOCUMENT_TAB_FIELDS = 'documentTab(body,documentStyle,namedStyles,lists)';
+
+export const TAB_BODY_RANGE_FIELDS = buildTabsFieldMask(TAB_BODY_RANGE_DOCUMENT_TAB_FIELDS);
+export const TAB_BODY_END_INDEX_FIELDS = buildTabsFieldMask(TAB_BODY_END_DOCUMENT_TAB_FIELDS);
+export const TAB_VERIFY_FIELDS = buildTabsFieldMask(TAB_VERIFY_DOCUMENT_TAB_FIELDS);
+export const TAB_READ_CONTENT_FIELDS = `title,documentId,${buildTabsFieldMask(TAB_READ_DOCUMENT_TAB_FIELDS)}`;
+
+const TAB_LIST_CHILD_FIELDS = `childTabs(${TAB_LIST_PROPERTIES},childTabs(${TAB_LIST_PROPERTIES},childTabs(${TAB_LIST_PROPERTIES})))`;
+const TAB_LIST_WITH_CONTENT_CHILD_FIELDS = `childTabs(${TAB_LIST_PROPERTIES},${TAB_BODY_END_DOCUMENT_TAB_FIELDS},childTabs(${TAB_LIST_PROPERTIES},${TAB_BODY_END_DOCUMENT_TAB_FIELDS},childTabs(${TAB_LIST_PROPERTIES},${TAB_BODY_END_DOCUMENT_TAB_FIELDS})))`;
+
+export const TAB_LIST_FIELDS = `title,tabs(${TAB_LIST_PROPERTIES},${TAB_LIST_CHILD_FIELDS})`;
+export const TAB_LIST_WITH_CONTENT_FIELDS = `title,tabs(${TAB_LIST_PROPERTIES},${TAB_BODY_END_DOCUMENT_TAB_FIELDS},${TAB_LIST_WITH_CONTENT_CHILD_FIELDS})`;
+
+/**
+ * Returns bodyFields unchanged for a legacy (no tabId) documents.get, or wraps them
+ * in a 3-deep tabs mask when tabId is set. Do not mix a root body(...) with tabs(...).
+ */
+export function buildDocumentGetFields(bodyFields: string, tabId?: string): string {
+  return tabId ? buildTabsFieldMask(`documentTab(${bodyFields})`) : bodyFields;
+}
+
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[], writeControl?: docs_v1.Schema$WriteControl): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
   if (!requests || requests.length === 0) {
@@ -1038,6 +1077,32 @@ export function findTabById(doc: docs_v1.Schema$Document, tabId: string): docs_v
     };
 
     return searchTabs(doc.tabs);
+}
+
+/**
+ * Fetches a document with tab content and validates that tabId exists and has a
+ * documentTab. Default mask is tabId + nested childTabs + documentTab presence.
+ */
+export async function getDocumentTab(
+    docs: Docs,
+    documentId: string,
+    tabId: string,
+    documentTabFields: string = TAB_VERIFY_DOCUMENT_TAB_FIELDS
+): Promise<docs_v1.Schema$Tab> {
+    const res = await docs.documents.get({
+        documentId,
+        includeTabsContent: true,
+        suggestionsViewMode: SUGGESTIONS_VIEW_MODE,
+        fields: buildTabsFieldMask(documentTabFields),
+    });
+    const tab = findTabById(res.data, tabId);
+    if (!tab) {
+        throw new UserError(`Tab with ID "${tabId}" not found in document.`);
+    }
+    if (!tab.documentTab) {
+        throw new UserError(`Tab "${tabId}" does not have content (may not be a document tab).`);
+    }
+    return tab;
 }
 
 const ORDERED_GLYPH_TYPES = new Set([
