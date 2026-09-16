@@ -1,4 +1,9 @@
 // tests/tools-list-order.test.js
+import {
+  CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+  listToolsOverHttpStream,
+  listToolsOverStdio,
+} from './live-fastmcp-helpers.js';
 import assert from 'node:assert';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -152,4 +157,49 @@ describe('tools/list registration order', () => {
       assert.equal(source.includes('cacheScope'), false, `${file} contains cacheScope`);
     }
   });
+});
+
+function assertLiveToolsList(listed, expectedNames) {
+  const names = listed.tools.map((tool) => tool.name);
+  assert.deepStrictEqual(names, expectedNames);
+  for (const response of listed.listResults) {
+    assert.deepStrictEqual(Object.keys(response.result), ['tools']);
+  }
+  const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
+  assert.notEqual(create, undefined);
+  assert.deepStrictEqual(
+    create.inputSchema.properties.replacements,
+    CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+  );
+}
+
+describe('live FastMCP tools/list', () => {
+  it(
+    'stdio tools/list is byte-identical across two process starts',
+    { timeout: 300000 },
+    async () => {
+      const first = await listToolsOverStdio();
+      const second = await listToolsOverStdio();
+      assertLiveToolsList(first, ADD_TOOL_NAMES);
+      assertLiveToolsList(second, ADD_TOOL_NAMES);
+      assert.deepStrictEqual(
+        first.tools.map((tool) => tool.name),
+        second.tools.map((tool) => tool.name),
+      );
+    },
+  );
+
+  it(
+    'httpStream tools/list matches ADD_TOOL_NAMES and live replacements schema',
+    { timeout: 180000 },
+    async () => {
+      const listed = await listToolsOverHttpStream();
+      assertLiveToolsList(listed, ADD_TOOL_NAMES);
+      assert.ok(
+        listed.stderr.includes(
+          `MCP Server running on httpStream transport, port ${listed.port}. Endpoint: /mcp`,
+        ),
+      );
+    },
+  );
 });

@@ -4,6 +4,12 @@ import {
   resolveHttpStreamBind,
   startConfiguredTransport,
 } from '../dist/mcpTransport.js';
+import {
+  CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+  listToolsOverHttpStream,
+  listToolsOverStdio,
+  runStartServerCatch,
+} from './live-fastmcp-helpers.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
@@ -159,24 +165,24 @@ describe('createBearerAuthenticate', () => {
 });
 
 describe('startConfiguredTransport', () => {
-  it('Start success http', async () => {
-    const { calls, server } = mockStartServer();
-    const logs = [];
-    await startConfiguredTransport(
-      server,
-      { MCP_TRANSPORT: 'httpStream' },
-      (message) => {
-        logs.push(message);
-      },
+  it('Start success http', { timeout: 180000 }, async () => {
+    const listed = await listToolsOverHttpStream();
+    const names = listed.tools.map((tool) => tool.name);
+    assert.strictEqual(names.length, 108);
+    assert.strictEqual(names[0], 'readGoogleDoc');
+    assert.strictEqual(names[names.length - 1], 'send_draft');
+    assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
+    const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
+    assert.notEqual(create, undefined);
+    assert.deepStrictEqual(
+      create.inputSchema.properties.replacements,
+      CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
     );
-    assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual(calls[0], {
-      transportType: 'httpStream',
-      httpStream: { port: 8787, host: '127.0.0.1' },
-    });
-    assert.deepStrictEqual(logs, [
-      'MCP Server running on httpStream transport, port 8787. Endpoint: /mcp',
-    ]);
+    assert.ok(
+      listed.stderr.includes(
+        `MCP Server running on httpStream transport, port ${listed.port}. Endpoint: /mcp`,
+      ),
+    );
   });
 
   it('Start failure', async () => {
@@ -200,18 +206,19 @@ describe('startConfiguredTransport', () => {
     assert.deepStrictEqual(logs, []);
   });
 
-  it('Start success stdio', async () => {
-    const { calls, server } = mockStartServer();
-    const logs = [];
-    await startConfiguredTransport(server, {}, (message) => {
-      logs.push(message);
-    });
-    assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual(calls[0], { transportType: 'stdio' });
-    assert.equal(Object.hasOwn(calls[0], 'httpStream'), false);
-    assert.deepStrictEqual(logs, [
-      'MCP Server running on stdio transport. Awaiting client connection...',
-    ]);
+  it('Start success stdio', { timeout: 180000 }, async () => {
+    const listed = await listToolsOverStdio();
+    const names = listed.tools.map((tool) => tool.name);
+    assert.strictEqual(names.length, 108);
+    assert.strictEqual(names[0], 'readGoogleDoc');
+    assert.strictEqual(names[names.length - 1], 'send_draft');
+    assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
+    const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
+    assert.notEqual(create, undefined);
+    assert.deepStrictEqual(
+      create.inputSchema.properties.replacements,
+      CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+    );
   });
 
   it('Start failure stdio', async () => {
@@ -333,6 +340,19 @@ describe('server.ts process handlers', () => {
     assert.match(
       source,
       /\.\.\.\(process\.env\.MCP_HTTP_TOKEN\s*\?\s*\{\s*authenticate:\s*McpTransport\.createBearerAuthenticate\(process\.env\.MCP_HTTP_TOKEN\)\s*\}\s*:\s*\{\}\)/,
+    );
+  });
+
+  it('startServer catch exits 1 with FATAL on invalid MCP_PORT', { timeout: 180000 }, async () => {
+    const result = await runStartServerCatch();
+    assert.strictEqual(result.code, 1);
+    assert.ok(
+      result.stderr.includes('FATAL: Server failed to start:'),
+      result.stderr,
+    );
+    assert.ok(
+      result.stderr.includes('MCP_PORT must be an integer between 1 and 65535.'),
+      result.stderr,
     );
   });
 });
