@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+
+jobs:
+  build-test-token-cost:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install tiktoken
+        run: pip install tiktoken
+
+      - name: Reproduce archived token cost
+        run: |
+          python3 scripts/measure-token-cost.py scripts/tools-list-2026-09-14.json archive-token-report.json | tee archive-measure.txt
+          grep -F 'TOOLS: 108' archive-measure.txt
+          grep -F 'TOTAL TOKENS (cl100k_base, compact JSON): 18,200' archive-measure.txt
+          grep -F 'AVERAGE: 169' archive-measure.txt
+
+      - name: Assert archived token report
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const report = JSON.parse(readFileSync("archive-token-report.json", "utf8"));
+          const tools = report.tools;
+          if (!Array.isArray(tools) || tools.length !== 108) {
+            throw new Error(`expected 108 tools in archive report, got ${Array.isArray(tools) ? tools.length : typeof tools}`);
+          }
+          if (report.total !== 18200) {
+            throw new Error(`expected archive report total 18200, got ${report.total}`);
+          }
+          const sum = tools.reduce((acc, t) => acc + t.tokens, 0);
+          if (sum !== report.total) {
+            throw new Error(`archive report total ${report.total} !== sum(tools.tokens) ${sum}`);
+          }
+          '
+
+      - name: Capture current tools/list
+        run: node scripts/capture-tools-list.mjs tools-list-current.json
+
+      - name: Assert captured tools/list shape
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const data = JSON.parse(readFileSync("tools-list-current.json", "utf8"));
+          const tools = data.tools;
+          if (!Array.isArray(tools) || tools.length !== 108) {
+            throw new Error(`expected 108 tools, got ${Array.isArray(tools) ? tools.length : typeof tools}`);
+          }
+          if (tools[0]?.name !== "readGoogleDoc") {
+            throw new Error(`first tool is ${tools[0]?.name}, expected readGoogleDoc`);
+          }
+          if (tools.at(-1)?.name !== "send_draft") {
+            throw new Error(`last tool is ${tools.at(-1)?.name}, expected send_draft`);
+          }
+          const missing = tools.filter((t) => !("name" in t) || !("description" in t) || !("inputSchema" in t));
+          if (missing.length) {
+            throw new Error(`tools missing name/description/inputSchema: ${missing.map((t) => t.name).join(", ")}`);
+          }
+          '
+
+      - name: Measure current token cost
+        run: python3 scripts/measure-token-cost.py tools-list-current.json current-token-report.json
+
+      - name: Assert current token report
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          const report = JSON.parse(readFileSync("current-token-report.json", "utf8"));
+          const tools = report.tools;
+          if (!Array.isArray(tools) || tools.length !== 108) {
+            throw new Error(`expected 108 tools in current report, got ${Array.isArray(tools) ? tools.length : typeof tools}`);
+          }
+          const sum = tools.reduce((acc, t) => acc + t.tokens, 0);
+          if (!Number.isFinite(report.total) || sum !== report.total) {
+            throw new Error(`current report total ${report.total} !== sum(tools.tokens) ${sum}`);
+          }
+          '
+
+      - name: Enforce token budget
+        run: node scripts/check-token-budget.js current-token-report.json

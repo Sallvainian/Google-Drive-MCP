@@ -11,8 +11,11 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
 ## Policy
 
 - Never commit `credentials.json` or `token.json` — OAuth secrets, gitignored at `.gitignore:6-7`.
-- `.claude/` is tracked deliberately; `.grok/`, `.codex/`, `.cursor/`, `_bmad/` and
-  `_bmad-output/` stay ignored. This flipped across six commits — do not re-litigate it.
+- `.claude/` is tracked deliberately; `.grok/`, `.codex/`, `.cursor/` and `_bmad/` stay
+  ignored. This flipped across six commits — do not re-litigate it. `_bmad-output/` is
+  ignored. `_bmad-output/specs/` is un-ignored so a bmad-loop story re-drive can read its
+  COMMITTED spec from a fresh worktree, but those specs are NOT published: they index
+  unfixed findings by file and line, and this repo is public. Keep them local.
 
 ## Where things are
 
@@ -35,8 +38,10 @@ docs live in `docs/` — they are regenerated wholesale, not hand-edited.
   that used to fail was corrected to match what `googleDocsApiHelpers.ts:79` requests.
 - No linter or formatter is configured. Do not add one uninvited; there is no `lint` script.
 - `tsconfig.json` covers `src/**/*` only — `tests/` is never typechecked.
-- CI runs no build and no tests; both workflows only invoke `anthropics/claude-code-action@v1`.
-  Verify locally, nothing will catch it for you.
+- CI: `.github/workflows/ci.yml` on `pull_request` runs `npm ci`, `npm run build`,
+  `npm test`, then the token-cost gate (`scripts/measure-token-cost.py` plus
+  `scripts/check-token-budget.js`) under Node 24. The two Claude workflows still
+  only invoke `anthropics/claude-code-action@v1` after `npm ci`; they are not the gate.
 - No Node version is declared (no `engines`, no `.nvmrc`). README says 18+; both CI
   workflows pin Node 24.
 

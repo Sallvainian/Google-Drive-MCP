@@ -83,7 +83,7 @@ This comprehensive server uses the Model Context Protocol (MCP) and the `fastmcp
 
 Before you start, make sure you have:
 
-1.  **Node.js and npm:** A recent version of Node.js (which includes npm) installed on your computer. You can download it from [nodejs.org](https://nodejs.org/). (Version 18 or higher recommended).
+1.  **Node.js and npm:** Node.js (which includes npm) installed on your computer. You can download it from [nodejs.org](https://nodejs.org/). **Version 22 or higher is required** — `googleapis` and `google-auth-library` both declare `engines.node >=22`.
 2.  **Git:** Required for cloning this repository. ([Download Git](https://git-scm.com/downloads)).
 3.  **A Google Account:** The account that owns or has access to the Google Docs you want to interact with.
 4.  **Command Line Familiarity:** Basic comfort using a terminal or command prompt (like Terminal on macOS/Linux, or Command Prompt/PowerShell on Windows).

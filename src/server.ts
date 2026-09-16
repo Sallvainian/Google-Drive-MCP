@@ -43,9 +43,11 @@ LabelVisibilityParameter,
 import * as GDocsHelpers from './googleDocsApiHelpers.js';
 import * as SheetsHelpers from './googleSheetsApiHelpers.js';
 import * as SlidesHelpers from './googleSlidesApiHelpers.js';
+import * as DriveHelpers from './googleDriveApiHelpers.js';
 import * as GmailHelpers from './googleGmailApiHelpers.js';
 import * as LabelManager from './gmailLabelManager.js';
 import * as FilterManager from './gmailFilterManager.js';
+import * as McpTransport from './mcpTransport.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
@@ -69,7 +71,7 @@ googleSlides = google.slides({ version: 'v1', auth: authClient });
 googleGmail = google.gmail({ version: 'v1', auth: authClient });
 console.error("Google API client authorized successfully.");
 } catch (error) {
-console.error("FATAL: Failed to initialize Google API client:", error);
+console.error("FATAL: Failed to initialize Google API client.");
 authClient = null; // Reset on failure
 googleDocs = null;
 googleDrive = null;
@@ -155,7 +157,10 @@ process.on('unhandledRejection', (reason: unknown) => {
 
 const server = new FastMCP({
   name: 'Ultimate Google Docs & Sheets MCP Server',
-  version: '1.0.0'
+  version: '1.0.0',
+  ...(process.env.MCP_HTTP_TOKEN
+    ? { authenticate: McpTransport.createBearerAuthenticate(process.env.MCP_HTTP_TOKEN) }
+    : {}),
 });
 
 // --- Helper to get Docs client within tools ---
@@ -203,166 +208,6 @@ throw new UserError("Gmail client is not initialized. Authentication might have 
 return gmail;
 }
 
-// === HELPER FUNCTIONS ===
-
-/**
- * Converts Google Docs JSON structure to Markdown format
- */
-function convertDocsJsonToMarkdown(docData: any): string {
-    let markdown = '';
-
-    if (!docData.body?.content) {
-        return 'Document appears to be empty.';
-    }
-
-    docData.body.content.forEach((element: any) => {
-        if (element.paragraph) {
-            markdown += convertParagraphToMarkdown(element.paragraph);
-        } else if (element.table) {
-            markdown += convertTableToMarkdown(element.table);
-        } else if (element.sectionBreak) {
-            markdown += '\n---\n\n'; // Section break as horizontal rule
-        }
-    });
-
-    return markdown.trim();
-}
-
-/**
- * Converts a paragraph element to markdown
- */
-function convertParagraphToMarkdown(paragraph: any): string {
-    let text = '';
-    let isHeading = false;
-    let headingLevel = 0;
-    let isList = false;
-    let listType = '';
-
-    // Check paragraph style for headings and lists
-    if (paragraph.paragraphStyle?.namedStyleType) {
-        const styleType = paragraph.paragraphStyle.namedStyleType;
-        if (styleType.startsWith('HEADING_')) {
-            isHeading = true;
-            headingLevel = parseInt(styleType.replace('HEADING_', ''));
-        } else if (styleType === 'TITLE') {
-            isHeading = true;
-            headingLevel = 1;
-        } else if (styleType === 'SUBTITLE') {
-            isHeading = true;
-            headingLevel = 2;
-        }
-    }
-
-    // Check for bullet lists
-    if (paragraph.bullet) {
-        isList = true;
-        listType = paragraph.bullet.listId ? 'bullet' : 'bullet';
-    }
-
-    // Process text elements
-    if (paragraph.elements) {
-        paragraph.elements.forEach((element: any) => {
-            if (element.textRun) {
-                text += convertTextRunToMarkdown(element.textRun);
-            }
-        });
-    }
-
-    // Format based on style
-    if (isHeading && text.trim()) {
-        const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        return `${hashes} ${text.trim()}\n\n`;
-    } else if (isList && text.trim()) {
-        return `- ${text.trim()}\n`;
-    } else if (text.trim()) {
-        return `${text.trim()}\n\n`;
-    }
-
-    return '\n'; // Empty paragraph
-}
-
-/**
- * Converts a text run to markdown with formatting
- */
-function convertTextRunToMarkdown(textRun: any): string {
-    let text = textRun.content || '';
-
-    if (textRun.textStyle) {
-        const style = textRun.textStyle;
-
-        // Apply formatting
-        if (style.bold && style.italic) {
-            text = `***${text}***`;
-        } else if (style.bold) {
-            text = `**${text}**`;
-        } else if (style.italic) {
-            text = `*${text}*`;
-        }
-
-        if (style.underline && !style.link) {
-            // Markdown doesn't have native underline, use HTML
-            text = `<u>${text}</u>`;
-        }
-
-        if (style.strikethrough) {
-            text = `~~${text}~~`;
-        }
-
-        if (style.link?.url) {
-            text = `[${text}](${style.link.url})`;
-        }
-    }
-
-    return text;
-}
-
-/**
- * Converts a table to markdown format
- */
-function convertTableToMarkdown(table: any): string {
-    if (!table.tableRows || table.tableRows.length === 0) {
-        return '';
-    }
-
-    let markdown = '\n';
-    let isFirstRow = true;
-
-    table.tableRows.forEach((row: any) => {
-        if (!row.tableCells) return;
-
-        let rowText = '|';
-        row.tableCells.forEach((cell: any) => {
-            let cellText = '';
-            if (cell.content) {
-                cell.content.forEach((element: any) => {
-                    if (element.paragraph?.elements) {
-                        element.paragraph.elements.forEach((pe: any) => {
-                            if (pe.textRun?.content) {
-                                cellText += pe.textRun.content.replace(/\n/g, ' ').trim();
-                            }
-                        });
-                    }
-                });
-            }
-            rowText += ` ${cellText} |`;
-        });
-
-        markdown += rowText + '\n';
-
-        // Add header separator after first row
-        if (isFirstRow) {
-            let separator = '|';
-            for (let i = 0; i < row.tableCells.length; i++) {
-                separator += ' --- |';
-            }
-            markdown += separator + '\n';
-            isFirstRow = false;
-        }
-    });
-
-    return markdown + '\n';
-}
-
 // === TOOL DEFINITIONS ===
 
 // --- Foundational Tools ---
@@ -397,8 +242,9 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
 
         // If tabId is specified, find the specific tab
         let contentSource: any;
+        let targetTab: any;
         if (args.tabId) {
-            const targetTab = GDocsHelpers.findTabById(res.data, args.tabId);
+            targetTab = GDocsHelpers.findTabById(res.data, args.tabId);
             if (!targetTab) {
                 throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
             }
@@ -422,7 +268,9 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
         }
 
         if (args.format === 'markdown') {
-            const markdownContent = convertDocsJsonToMarkdown(contentSource);
+            const markdownContent = GDocsHelpers.convertDocsJsonToMarkdown(args.tabId
+                ? { body: targetTab.documentTab.body, lists: targetTab.documentTab.lists || res.data.lists }
+                : contentSource);
             const totalLength = markdownContent.length;
             log.info(`Generated markdown: ${totalLength} characters`);
 
@@ -1233,7 +1081,7 @@ throw new UserError(`Failed to insert image: ${error.message || 'Unknown error'}
 
 server.addTool({
 name: 'insertLocalImage',
-description: 'Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder).',
+description: 'Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder). Temporarily grants anyone/reader (anyone-with-link) so Docs can fetch the image, then revokes that grant after insert.',
 parameters: DocumentIdParameter.extend({
 localImagePath: z.string().describe('Absolute path to the local image file (supports .jpg, .jpeg, .png, .gif, .bmp, .webp, .svg).'),
 index: z.number().int().min(1).describe('The index (1-based) where the image should be inserted in the document.'),
@@ -1253,7 +1101,8 @@ if (args.uploadToSameFolder) {
 try {
 const docInfo = await drive.files.get({
 fileId: args.documentId,
-fields: 'parents'
+fields: 'parents',
+supportsAllDrives: true
 });
 if (docInfo.data.parents && docInfo.data.parents.length > 0) {
 parentFolderId = docInfo.data.parents[0];
@@ -1264,31 +1113,25 @@ log.warn(`Could not determine document's parent folder, using Drive root: ${fold
 }
 }
 
-// Upload the image to Drive
 log.info(`Uploading image to Drive...`);
-const imageUrl = await GDocsHelpers.uploadImageToDrive(
+const uploaded = await GDocsHelpers.insertLocalImageFromPath(
+docs,
 drive,
 args.localImagePath,
-parentFolderId
-);
-log.info(`Image uploaded successfully, public URL: ${imageUrl}`);
-
-// Insert the image into the document
-await GDocsHelpers.insertInlineImage(
-docs,
 args.documentId,
-imageUrl,
 args.index,
 args.width,
-args.height
+args.height,
+parentFolderId
 );
+log.info(`Image uploaded and inserted; temporary anyone/reader grant revoked`);
 
 let sizeInfo = '';
 if (args.width && args.height) {
 sizeInfo = ` with size ${args.width}x${args.height}pt`;
 }
 
-return `Successfully uploaded image to Drive and inserted it at index ${args.index}${sizeInfo}.\nImage URL: ${imageUrl}`;
+return `Successfully uploaded image to Drive as file ${uploaded.fileId} and inserted it at index ${args.index}${sizeInfo}. The temporary anyone/reader grant was revoked.`;
 } catch (error: any) {
 log.error(`Error uploading/inserting local image in doc ${args.documentId}: ${error.message || error}`);
 if (error instanceof UserError) throw error;
@@ -1722,11 +1565,11 @@ try {
   let queryString = "mimeType='application/vnd.google-apps.document' and trashed=false";
   if (args.query) {
     if (args.searchIn === 'name') {
-      queryString += ` and name contains '${args.query}'`;
+      queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     } else if (args.searchIn === 'content') {
-      queryString += ` and fullText contains '${args.query}'`;
+      queryString += ` and fullText contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     } else { // both
-      queryString += ` and (name contains '${args.query}' or fullText contains '${args.query}')`;
+      queryString += ` and (name contains ${DriveHelpers.driveQueryQuoted(args.query)} or fullText contains ${DriveHelpers.driveQueryQuoted(args.query)})`;
     }
   }
 
@@ -1738,6 +1581,8 @@ try {
     pageSize: args.maxResults,
     ...(usesFullText ? {} : { orderBy: args.orderBy === 'name' ? 'name' : args.orderBy }),
     fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1791,16 +1636,16 @@ try {
 
   // Add search criteria
   if (args.searchIn === 'name') {
-    queryString += ` and name contains '${args.searchQuery}'`;
+    queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)}`;
   } else if (args.searchIn === 'content') {
-    queryString += ` and fullText contains '${args.searchQuery}'`;
+    queryString += ` and fullText contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)}`;
   } else {
-    queryString += ` and (name contains '${args.searchQuery}' or fullText contains '${args.searchQuery}')`;
+    queryString += ` and (name contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)} or fullText contains ${DriveHelpers.driveQueryQuoted(args.searchQuery)})`;
   }
 
   // Add date filter if provided
   if (args.modifiedAfter) {
-    queryString += ` and modifiedTime > '${args.modifiedAfter}'`;
+    queryString += ` and modifiedTime > ${DriveHelpers.driveQueryQuoted(args.modifiedAfter)}`;
   }
 
   // fullText search doesn't support orderBy - only apply sorting for name-only search
@@ -1811,6 +1656,8 @@ try {
     pageSize: args.maxResults,
     ...(usesFullText ? {} : { orderBy: 'modifiedTime desc' }),
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),parents)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1862,13 +1709,15 @@ try {
   cutoffDate.setDate(cutoffDate.getDate() - args.daysBack);
   const cutoffDateStr = cutoffDate.toISOString();
 
-  const queryString = `mimeType='application/vnd.google-apps.document' and trashed=false and modifiedTime > '${cutoffDateStr}'`;
+  const queryString = `mimeType='application/vnd.google-apps.document' and trashed=false and modifiedTime > ${DriveHelpers.driveQueryQuoted(cutoffDateStr)}`;
 
   const response = await drive.files.list({
     q: queryString,
     pageSize: args.maxResults,
     orderBy: 'modifiedTime desc',
     fields: 'files(id,name,modifiedTime,createdTime,webViewLink,owners(displayName),lastModifyingUser(displayName))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const files = response.data.files || [];
@@ -1913,6 +1762,7 @@ try {
     // Note: 'permissions' and 'alternateLink' fields removed - they cause
     // "Invalid field selection" errors for Google Docs files
     fields: 'id,name,description,mimeType,size,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName,emailAddress),shared,parents,version',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -1986,6 +1836,7 @@ try {
   const response = await drive.files.create({
     requestBody: folderMetadata,
     fields: 'id,name,parents,webViewLink',
+    supportsAllDrives: true,
   });
 
   const folder = response.data;
@@ -2013,7 +1864,7 @@ const drive = await getDriveClient();
 log.info(`Listing contents of folder: ${args.folderId}`);
 
 try {
-  let queryString = `'${args.folderId}' in parents and trashed=false`;
+  let queryString = `${DriveHelpers.driveQueryQuoted(args.folderId)} in parents and trashed=false`;
 
   // Filter by type if specified
   if (!args.includeSubfolders && !args.includeFiles) {
@@ -2031,6 +1882,8 @@ try {
     pageSize: args.maxResults,
     orderBy: 'folder,name',
     fields: 'files(id,name,mimeType,size,modifiedTime,webViewLink,owners(displayName))',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   const items = response.data.files || [];
@@ -2100,10 +1953,12 @@ interface FolderNode {
 
 async function getFoldersInFolder(parentId: string): Promise<FolderNode[]> {
   const response = await drive.files.list({
-    q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+    q: `${DriveHelpers.driveQueryQuoted(parentId)} in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
     pageSize: 100,
     orderBy: 'name',
     fields: 'files(id,name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
   });
 
   return (response.data.files || []).map(f => ({
@@ -2162,6 +2017,7 @@ try {
     const rootFolder = await drive.files.get({
       fileId: args.folderId,
       fields: 'name',
+      supportsAllDrives: true,
     });
     rootName = rootFolder.data.name || 'Unknown Folder';
   }
@@ -2201,6 +2057,7 @@ try {
   const response = await drive.files.get({
     fileId: args.folderId,
     fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents',
+    supportsAllDrives: true,
   });
 
   const folder = response.data;
@@ -2268,6 +2125,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,parents',
+    supportsAllDrives: true,
   });
 
   const fileName = fileInfo.data.name;
@@ -2277,6 +2135,7 @@ try {
     fileId: args.fileId,
     addParents: args.newParentId,
     fields: 'id,name,parents',
+    supportsAllDrives: true,
   };
 
   if (args.removeFromAllParents && currentParents.length > 0) {
@@ -2313,6 +2172,7 @@ try {
   const originalFile = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,parents',
+    supportsAllDrives: true,
   });
 
   const copyMetadata: drive_v3.Schema$File = {
@@ -2329,6 +2189,7 @@ try {
     fileId: args.fileId,
     requestBody: copyMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const copiedFile = response.data;
@@ -2360,6 +2221,7 @@ try {
       name: args.newName,
     },
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -2389,6 +2251,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'name,mimeType',
+    supportsAllDrives: true,
   });
 
   const fileName = fileInfo.data.name;
@@ -2397,6 +2260,7 @@ try {
   if (args.skipTrash) {
     await drive.files.delete({
       fileId: args.fileId,
+      supportsAllDrives: true,
     });
     return `Permanently deleted ${isFolder ? 'folder' : 'file'} "${fileName}".`;
   } else {
@@ -2405,6 +2269,7 @@ try {
       requestBody: {
         trashed: true,
       },
+      supportsAllDrives: true,
     });
     return `Moved ${isFolder ? 'folder' : 'file'} "${fileName}" to trash. It can be restored from the trash.`;
   }
@@ -2480,6 +2345,7 @@ try {
     requestBody: fileMetadata,
     media: media,
     fields: 'id,name,webViewLink,size',
+    supportsAllDrives: true,
   });
 
   const file = response.data;
@@ -2538,13 +2404,13 @@ parameters: z.object({
   fileId: z.string().describe('Google Drive file ID to download.'),
   savePath: z.string().describe('Absolute path to the local directory where the file should be saved.'),
   filename: z.string().optional().describe('Optional override for the filename. If not provided, uses the original file name from Drive.'),
+  overwrite: z.boolean().optional().default(false).describe('Replace an existing file at the destination. Defaults to false.'),
   exportFormat: z.enum(['default', 'pdf', 'docx', 'xlsx', 'csv', 'pptx', 'txt']).optional().default('default')
     .describe('Export format for Google-native files. "default" uses docx/xlsx/pptx. For Google Docs: pdf, docx, txt. For Sheets: pdf, xlsx, csv. For Slides: pdf, pptx.'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
 const fs = await import('fs');
-const path = await import('path');
 
 log.info(`Downloading file ${args.fileId} to ${args.savePath}`);
 
@@ -2563,6 +2429,7 @@ try {
   const fileInfo = await drive.files.get({
     fileId: args.fileId,
     fields: 'id,name,mimeType,size',
+    supportsAllDrives: true,
   });
 
   const fileMimeType = fileInfo.data.mimeType || '';
@@ -2636,7 +2503,7 @@ try {
       finalFilename = originalName + exportConfig.extension;
     }
 
-    localFilePath = path.join(args.savePath, finalFilename);
+    localFilePath = GmailHelpers.resolveSafeDownloadPath(args.savePath, finalFilename, args.overwrite);
 
     log.info(`Exporting Google native file as ${exportConfig.extension} to ${localFilePath}`);
 
@@ -2669,13 +2536,14 @@ try {
       finalFilename = originalName;
     }
 
-    localFilePath = path.join(args.savePath, finalFilename);
+    localFilePath = GmailHelpers.resolveSafeDownloadPath(args.savePath, finalFilename, args.overwrite);
 
     log.info(`Downloading regular file to ${localFilePath}`);
 
     const response = await drive.files.get({
       fileId: args.fileId,
       alt: 'media',
+      supportsAllDrives: true,
     }, {
       responseType: 'arraybuffer',
     });
@@ -2687,6 +2555,7 @@ try {
   }
 } catch (error: any) {
   log.error(`Error downloading file: ${error.message || error}`);
+  if (error instanceof UserError) throw error;
   if (error.code === 404) throw new UserError("File not found. Check the file ID.");
   if (error.code === 403) throw new UserError("Permission denied or file too large to export (>10MB via API). Check file access permissions.");
   if (error.code === 'ENOSPC') throw new UserError("No space left on device. Free up disk space and try again.");
@@ -2721,6 +2590,7 @@ execute: async (args, { log }) => {
       },
       sendNotificationEmail: args.sendNotification,
       emailMessage: args.message,
+      supportsAllDrives: true,
     });
     return `Successfully shared file with ${args.email} (role: ${args.role}).`;
   } catch (error: any) {
@@ -2749,11 +2619,13 @@ execute: async (args, { log }) => {
         type: 'anyone',
         role: args.role,
       },
+      supportsAllDrives: true,
     });
     // Get the file's web view link
     const fileInfo = await drive.files.get({
       fileId: args.fileId,
       fields: 'webViewLink',
+      supportsAllDrives: true,
     });
     return `File is now publicly accessible (role: ${args.role}).\nPublic link: ${fileInfo.data.webViewLink}`;
   } catch (error: any) {
@@ -2778,6 +2650,7 @@ execute: async (args, { log }) => {
     const response = await drive.permissions.list({
       fileId: args.fileId,
       fields: 'permissions(id,type,role,emailAddress,displayName,domain)',
+      supportsAllDrives: true,
     });
     const permissions = response.data.permissions || [];
     if (permissions.length === 0) {
@@ -2832,6 +2705,7 @@ try {
   const response = await drive.files.create({
     requestBody: documentMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const document = response.data;
@@ -2876,7 +2750,7 @@ parameters: z.object({
   templateId: z.string().describe('ID of the template document to copy from.'),
   newTitle: z.string().min(1).describe('Title for the new document.'),
   parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
-  replacements: z.record(z.string()).optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
+  replacements: z.record(z.string()).nullable().optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
@@ -2896,6 +2770,7 @@ try {
     fileId: args.templateId,
     requestBody: copyMetadata,
     fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
   });
 
   const document = response.data;
@@ -3226,6 +3101,7 @@ execute: async (args, { log }) => {
     const driveResponse = await drive.files.create({
       requestBody: spreadsheetMetadata,
       fields: 'id,name,webViewLink',
+      supportsAllDrives: true,
     });
 
     const spreadsheetId = driveResponse.data.id;
@@ -3280,7 +3156,7 @@ execute: async (args, { log }) => {
     let usesFullText = false;
     if (args.query) {
       // Use name-only search to allow sorting, fullText search doesn't support orderBy
-      queryString += ` and name contains '${args.query}'`;
+      queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
     }
 
     const response = await drive.files.list({
@@ -3288,6 +3164,8 @@ execute: async (args, { log }) => {
       pageSize: args.maxResults,
       orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
       fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
 
     const files = response.data.files || [];
@@ -3336,103 +3214,6 @@ const FormattedSectionSchema = z.object({
 
 const FormattedContentSchema = z.array(FormattedSectionSchema).describe('Array of formatted content sections to insert');
 
-type FormattedSection = z.infer<typeof FormattedSectionSchema>;
-
-function buildFormattedContentRequests(
-  sections: FormattedSection[],
-  startingIndex: number
-): { textRequests: docs_v1.Schema$Request[], styleRequests: docs_v1.Schema$Request[], finalIndex: number } {
-  const textRequests: docs_v1.Schema$Request[] = [];
-  const styleRequests: docs_v1.Schema$Request[] = [];
-  let currentIndex = startingIndex;
-
-  for (const section of sections) {
-    const text = section.text + '\n';
-    const textLength = text.length;
-    const startIndex = currentIndex;
-    const endIndex = currentIndex + textLength;
-
-    textRequests.push({
-      insertText: {
-        location: { index: currentIndex },
-        text: text,
-      },
-    });
-
-    let namedStyleType: string | null = null;
-    let isBullet = false;
-    let isNumbered = false;
-
-    switch (section.type) {
-      case 'title': namedStyleType = 'TITLE'; break;
-      case 'subtitle': namedStyleType = 'SUBTITLE'; break;
-      case 'heading1': namedStyleType = 'HEADING_1'; break;
-      case 'heading2': namedStyleType = 'HEADING_2'; break;
-      case 'heading3': namedStyleType = 'HEADING_3'; break;
-      case 'heading4': namedStyleType = 'HEADING_4'; break;
-      case 'bullet': isBullet = true; break;
-      case 'numbered': isNumbered = true; break;
-      default: namedStyleType = 'NORMAL_TEXT'; break;
-    }
-
-    if (namedStyleType) {
-      styleRequests.push({
-        updateParagraphStyle: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          paragraphStyle: { namedStyleType },
-          fields: 'namedStyleType',
-        },
-      });
-    }
-
-    if (isBullet) {
-      styleRequests.push({
-        createParagraphBullets: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          bulletPreset: 'BULLET_DISC_CIRCLE_SQUARE',
-        },
-      });
-    }
-
-    if (isNumbered) {
-      styleRequests.push({
-        createParagraphBullets: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          bulletPreset: 'NUMBERED_DECIMAL_NESTED',
-        },
-      });
-    }
-
-    const textStyleFields: string[] = [];
-    const textStyle: docs_v1.Schema$TextStyle = {};
-
-    if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
-    if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
-    if (section.color) {
-      const hex = section.color.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16) / 255;
-      const g = parseInt(hex.substring(2, 4), 16) / 255;
-      const b = parseInt(hex.substring(4, 6), 16) / 255;
-      textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
-      textStyleFields.push('foregroundColor');
-    }
-
-    if (textStyleFields.length > 0) {
-      styleRequests.push({
-        updateTextStyle: {
-          range: { startIndex, endIndex: endIndex - 1 },
-          textStyle,
-          fields: textStyleFields.join(','),
-        },
-      });
-    }
-
-    currentIndex = endIndex;
-  }
-
-  return { textRequests, styleRequests, finalIndex: currentIndex };
-}
-
 server.addTool({
   name: 'createFormattedDocument',
   description: `Creates a new Google Document with properly formatted content. Instead of raw text, you provide structured sections with formatting types (headings, bullets, etc.) and the tool applies proper Google Docs formatting automatically. This prevents auto-list conversion issues and ensures clean, professional documents.
@@ -3473,6 +3254,7 @@ Example content array:
       const createResponse = await drive.files.create({
         requestBody: documentMetadata,
         fields: 'id,name,webViewLink',
+        supportsAllDrives: true,
       });
 
       const document = createResponse.data;
@@ -3480,28 +3262,16 @@ Example content array:
       log.info(`Document created: ${documentId}`);
 
       // Step 2: Build and execute batch update requests for all content
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, 1);
+      await GDocsHelpers.executeBatchUpdate(docs, documentId, [...textRequests, ...styleRequests]);
+      log.info(`Inserted ${textRequests.length} text sections`);
+      log.info(`Applied ${styleRequests.length} style updates`);
 
       return `Successfully created formatted document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}\n\nAdded ${args.content.length} formatted sections.`;
 
     } catch (error: any) {
       log.error(`Error creating formatted document: ${error.message || error}`);
+      if (error instanceof UserError) throw error;
       if (error.code === 404) throw new UserError("Parent folder not found. Check the folder ID.");
       if (error.code === 403) throw new UserError("Permission denied. Make sure you have write access to the destination folder.");
       throw new UserError(`Failed to create formatted document: ${error.message || 'Unknown error'}`);
@@ -3531,23 +3301,10 @@ Example content array:
     log.info(`Inserting ${args.content.length} formatted sections into document ${args.documentId} at index ${args.index}`);
 
     try {
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, args.index);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, args.index);
+      await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [...textRequests, ...styleRequests]);
+      log.info(`Inserted ${textRequests.length} text sections`);
+      log.info(`Applied ${styleRequests.length} style updates`);
 
       return `Successfully inserted ${args.content.length} formatted sections at index ${args.index}.`;
 
@@ -3572,52 +3329,7 @@ IMPORTANT: This will DELETE all existing content and replace it with the new for
     log.info(`Replacing content in document ${args.documentId} with ${args.content.length} formatted sections`);
 
     try {
-      // Step 1: Get current document to find its length
-      const docResponse = await docs.documents.get({
-        documentId: args.documentId,
-        fields: 'body(content(endIndex))',
-      });
-
-      // Find the end index of the document
-      let endIndex = 1;
-      if (docResponse.data.body?.content) {
-        const lastElement = docResponse.data.body.content[docResponse.data.body.content.length - 1];
-        if (lastElement?.endIndex) {
-          endIndex = lastElement.endIndex;
-        }
-      }
-
-      // Step 2: Delete all existing content (if any)
-      if (endIndex > 2) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: {
-                range: { startIndex: 1, endIndex: endIndex - 1 },
-              },
-            }],
-          },
-        });
-        log.info(`Deleted existing content (indices 1-${endIndex - 1})`);
-      }
-
-      // Step 3: Insert new formatted content
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-      }
+      await GDocsHelpers.replaceFormattedDocumentContent(docs, args.documentId, args.content);
 
       return `Successfully replaced document content with ${args.content.length} formatted sections.`;
 
@@ -3656,52 +3368,13 @@ Example: To replace everything under "Block 2: Activities" with new content:
     log.info(`Updating section "${args.headingText}" in document ${args.documentId} (replaceHeading: ${args.replaceHeading})`);
 
     try {
-      // Step 1: Find the section range
-      const range = await GDocsHelpers.findSectionRange(docs, args.documentId, args.headingText);
-      if (!range) {
-        throw new UserError(`Could not find a heading matching "${args.headingText}" in the document. Make sure the heading text is an exact match.`);
-      }
-
-      const { headingStart, headingEnd, sectionEnd } = range;
-
-      // Step 2: Determine delete range
-      const deleteStart = args.replaceHeading ? headingStart : headingEnd;
-      const deleteEnd = sectionEnd;
-
-      // Step 3: Delete the section content
-      if (deleteEnd > deleteStart) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: {
-            requests: [{
-              deleteContentRange: {
-                range: { startIndex: deleteStart, endIndex: deleteEnd - 1 },
-              },
-            }],
-          },
-        });
-        log.info(`Deleted section content (indices ${deleteStart}-${deleteEnd - 1})`);
-      }
-
-      // Step 4: Insert new formatted content at the deletion point
-      const insertIndex = deleteStart;
-      const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, insertIndex);
-
-      if (textRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: textRequests },
-        });
-        log.info(`Inserted ${textRequests.length} text sections`);
-      }
-
-      if (styleRequests.length > 0) {
-        await docs.documents.batchUpdate({
-          documentId: args.documentId,
-          requestBody: { requests: styleRequests },
-        });
-        log.info(`Applied ${styleRequests.length} style updates`);
-      }
+      await GDocsHelpers.updateFormattedDocumentSection(
+        docs,
+        args.documentId,
+        args.headingText,
+        args.content,
+        args.replaceHeading,
+      );
 
       return `Successfully updated section "${args.headingText}" with ${args.content.length} formatted sections.${args.replaceHeading ? ' (heading was also replaced)' : ''}`;
 
@@ -3732,7 +3405,7 @@ server.addTool({
     try {
       let queryString = "mimeType='application/vnd.google-apps.presentation' and trashed=false";
       if (args.query) {
-        queryString += ` and name contains '${args.query}'`;
+        queryString += ` and name contains ${DriveHelpers.driveQueryQuoted(args.query)}`;
       }
 
       const response = await drive.files.list({
@@ -3740,6 +3413,8 @@ server.addTool({
         pageSize: args.maxResults,
         orderBy: args.orderBy === 'name' ? 'name' : args.orderBy,
         fields: 'files(id,name,modifiedTime,createdTime,size,webViewLink,owners(displayName,emailAddress))',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
       });
 
       const files = response.data.files || [];
@@ -5084,7 +4759,8 @@ server.addTool({
         args.messageId,
         args.attachmentId,
         args.savePath,
-        args.filename
+        args.filename,
+        args.overwrite
       );
 
       return JSON.stringify({
@@ -5533,9 +5209,7 @@ server.addTool({
       const originalMessage = await GmailHelpers.getMessage(gmail, args.messageId, 'metadata');
       const headers = GmailHelpers.parseEmailHeaders(originalMessage.payload?.headers || []);
 
-      const to = args.replyAll
-        ? [headers['from'], ...(headers['to']?.split(',').map(s => s.trim()) || [])].filter(Boolean)
-        : [headers['from']];
+      const to = GmailHelpers.buildReplyRecipients(headers['from'], headers['to'], args.replyAll);
 
       const subject = headers['subject']?.startsWith('Re:')
         ? headers['subject']
@@ -5974,18 +5648,8 @@ console.error("Starting Ultimate Google Docs, Sheets & Slides MCP server...");
       //   MCP_TRANSPORT=httpStream  → HTTP streaming (for remote hosting)
       //   unset / stdio            → stdio (default, spawned-by-client model)
       // When httpStream: MCP_PORT (default 8787) controls the listen port.
-      const useHttp = process.env.MCP_TRANSPORT === 'httpStream';
-      const httpPort = Number(process.env.MCP_PORT || 8787);
-      const configToUse = useHttp
-        ? { transportType: 'httpStream' as const, httpStream: { port: httpPort } }
-        : { transportType: 'stdio' as const };
-
-      server.start(configToUse);
-      if (useHttp) {
-        console.error(`MCP Server running on httpStream transport, port ${httpPort}. Endpoint: /mcp`);
-      } else {
-        console.error(`MCP Server running on stdio transport. Awaiting client connection...`);
-
+      await McpTransport.startConfiguredTransport(server, process.env, console.error);
+      if (process.env.MCP_TRANSPORT !== 'httpStream') {
         // Parent (Claude Code) closed the stdio pipe → no client left, exit cleanly.
         // Without this, orphaned servers stay alive forever after the parent dies.
         process.stdin.on('end', () => {

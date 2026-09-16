@@ -1,0 +1,3993 @@
+{
+  "tools": [
+    {
+      "description": "Reads the content of a specific Google Document, optionally returning structured data.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "text",
+              "json",
+              "markdown"
+            ],
+            "default": "markdown",
+            "description": "Output format: 'markdown' (default, preserves table structure), 'text' (plain text, no structure), 'json' (raw API structure, verbose)."
+          },
+          "maxLength": {
+            "type": "number",
+            "description": "Maximum character limit for text output. If not specified, returns full document content. Use this to limit very large documents."
+          },
+          "tabId": {
+            "type": "string",
+            "description": "The ID of the specific tab to read. If not specified, reads the first tab (or legacy document.body for documents without tabs)."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "readGoogleDoc"
+    },
+    {
+      "description": "Lists all tabs in a Google Document, including their hierarchy, IDs, and structure.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "includeContent": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to include a content summary for each tab (character count)."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listDocumentTabs"
+    },
+    {
+      "description": "Appends text to the very end of a specific Google Document or tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "textToAppend": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text to add to the end."
+          },
+          "addNewlineIfNeeded": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically add a newline before the appended text if the doc doesn't end with one."
+          },
+          "tabId": {
+            "type": "string",
+            "description": "The ID of the specific tab to append to. If not specified, appends to the first tab (or legacy document.body for documents without tabs)."
+          }
+        },
+        "required": [
+          "documentId",
+          "textToAppend"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "appendToGoogleDoc"
+    },
+    {
+      "description": "Inserts text at a specific index within the document body or a specific tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "textToInsert": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text to insert."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the text should be inserted."
+          },
+          "tabId": {
+            "type": "string",
+            "description": "The ID of the specific tab to insert into. If not specified, inserts into the first tab (or legacy document.body for documents without tabs)."
+          }
+        },
+        "required": [
+          "documentId",
+          "textToInsert",
+          "index"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertText"
+    },
+    {
+      "description": "Finds and replaces all occurrences of a text string in a Google Document. Useful for adapting templates or bulk text changes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document."
+          },
+          "findText": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text to find."
+          },
+          "replaceText": {
+            "type": "string",
+            "description": "The replacement text."
+          },
+          "matchCase": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether the search should be case-sensitive."
+          }
+        },
+        "required": [
+          "documentId",
+          "findText",
+          "replaceText"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "replaceAllText"
+    },
+    {
+      "description": "Deletes content within a specified range (start index inclusive, end index exclusive) from the document or a specific tab.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "startIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The starting index of the text range (inclusive, starts from 1)."
+          },
+          "endIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The ending index of the text range (exclusive)."
+          },
+          "tabId": {
+            "type": "string",
+            "description": "The ID of the specific tab to delete from. If not specified, deletes from the first tab (or legacy document.body for documents without tabs)."
+          }
+        },
+        "required": [
+          "documentId",
+          "startIndex",
+          "endIndex"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteRange"
+    },
+    {
+      "description": "Applies character-level formatting (bold, color, font, etc.) to a specific range or found text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "startIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The starting index of the text range (inclusive, starts from 1)."
+                  },
+                  "endIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The ending index of the text range (exclusive)."
+                  }
+                },
+                "required": [
+                  "startIndex",
+                  "endIndex"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "textToFind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The exact text string to locate."
+                  },
+                  "matchInstance": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1,
+                    "description": "Which instance of the text to target (1st, 2nd, etc.). Defaults to 1."
+                  }
+                },
+                "required": [
+                  "textToFind"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Specify the target range either by start/end indices or by finding specific text."
+          },
+          "style": {
+            "type": "object",
+            "properties": {
+              "bold": {
+                "type": "boolean",
+                "description": "Apply bold formatting."
+              },
+              "italic": {
+                "type": "boolean",
+                "description": "Apply italic formatting."
+              },
+              "underline": {
+                "type": "boolean",
+                "description": "Apply underline formatting."
+              },
+              "strikethrough": {
+                "type": "boolean",
+                "description": "Apply strikethrough formatting."
+              },
+              "fontSize": {
+                "type": "number",
+                "minimum": 1,
+                "description": "Set font size (in points, e.g., 12)."
+              },
+              "fontFamily": {
+                "type": "string",
+                "description": "Set font family (e.g., \"Arial\", \"Times New Roman\")."
+              },
+              "foregroundColor": {
+                "type": "string",
+                "description": "Set text color using hex format (e.g., \"#FF0000\")."
+              },
+              "backgroundColor": {
+                "type": "string",
+                "description": "Set text background color using hex format (e.g., \"#FFFF00\")."
+              },
+              "linkUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "Make the text a hyperlink pointing to this URL."
+              }
+            },
+            "additionalProperties": false,
+            "description": "The text styling to apply."
+          }
+        },
+        "required": [
+          "documentId",
+          "target",
+          "style"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "applyTextStyle"
+    },
+    {
+      "description": "Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "startIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The starting index of the text range (inclusive, starts from 1)."
+                  },
+                  "endIndex": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The ending index of the text range (exclusive)."
+                  }
+                },
+                "required": [
+                  "startIndex",
+                  "endIndex"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "textToFind": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "The exact text string to locate."
+                  },
+                  "matchInstance": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1,
+                    "description": "Which instance of the text to target (1st, 2nd, etc.). Defaults to 1."
+                  }
+                },
+                "required": [
+                  "textToFind"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "indexWithinParagraph": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "An index located anywhere within the target paragraph."
+                  }
+                },
+                "required": [
+                  "indexWithinParagraph"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "Specify the target paragraph either by start/end indices, by finding text within it, or by providing an index within it."
+          },
+          "style": {
+            "type": "object",
+            "properties": {
+              "alignment": {
+                "type": "string",
+                "enum": [
+                  "START",
+                  "END",
+                  "CENTER",
+                  "JUSTIFIED"
+                ],
+                "description": "Paragraph alignment. START=left for LTR languages, END=right for LTR languages."
+              },
+              "indentStart": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Left indentation in points."
+              },
+              "indentEnd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Right indentation in points."
+              },
+              "spaceAbove": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Space before the paragraph in points."
+              },
+              "spaceBelow": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Space after the paragraph in points."
+              },
+              "namedStyleType": {
+                "type": "string",
+                "enum": [
+                  "NORMAL_TEXT",
+                  "TITLE",
+                  "SUBTITLE",
+                  "HEADING_1",
+                  "HEADING_2",
+                  "HEADING_3",
+                  "HEADING_4",
+                  "HEADING_5",
+                  "HEADING_6"
+                ],
+                "description": "Apply a built-in named paragraph style (e.g., HEADING_1)."
+              },
+              "keepWithNext": {
+                "type": "boolean",
+                "description": "Keep this paragraph together with the next one on the same page."
+              }
+            },
+            "additionalProperties": false,
+            "description": "The paragraph styling to apply."
+          }
+        },
+        "required": [
+          "documentId",
+          "target",
+          "style"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "applyParagraphStyle"
+    },
+    {
+      "description": "Inserts a new table with the specified dimensions at a given index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of rows for the new table."
+          },
+          "columns": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of columns for the new table."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the table should be inserted."
+          }
+        },
+        "required": [
+          "documentId",
+          "rows",
+          "columns",
+          "index"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertTable"
+    },
+    {
+      "description": "Edits the content and/or basic style of a specific table cell. Provide either tableStartIndex OR searchText to locate the table. Use headerText to target the cell directly below a named header cell (the easiest option for template-style tables).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "tableStartIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The starting index of the TABLE element itself. Optional if searchText or headerText is provided."
+          },
+          "searchText": {
+            "type": "string",
+            "description": "Text to search for in any table cell to auto-locate the table. Use this instead of tableStartIndex when you don't know the index."
+          },
+          "headerText": {
+            "type": "string",
+            "description": "Text of the header cell. The tool will automatically edit the content cell directly below it. Overrides rowIndex/columnIndex."
+          },
+          "rowIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Row index (0-based). Not required when headerText is provided."
+          },
+          "columnIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Column index (0-based). Not required when headerText is provided."
+          },
+          "textContent": {
+            "type": "string",
+            "description": "Optional: New text content for the cell. Replaces existing content."
+          },
+          "textStyle": {
+            "type": "object",
+            "properties": {
+              "bold": {
+                "type": "boolean",
+                "description": "Apply bold formatting."
+              },
+              "italic": {
+                "type": "boolean",
+                "description": "Apply italic formatting."
+              },
+              "underline": {
+                "type": "boolean",
+                "description": "Apply underline formatting."
+              },
+              "strikethrough": {
+                "type": "boolean",
+                "description": "Apply strikethrough formatting."
+              },
+              "fontSize": {
+                "type": "number",
+                "minimum": 1,
+                "description": "Set font size (in points, e.g., 12)."
+              },
+              "fontFamily": {
+                "type": "string",
+                "description": "Set font family (e.g., \"Arial\", \"Times New Roman\")."
+              },
+              "foregroundColor": {
+                "type": "string",
+                "description": "Set text color using hex format (e.g., \"#FF0000\")."
+              },
+              "backgroundColor": {
+                "type": "string",
+                "description": "Set text background color using hex format (e.g., \"#FFFF00\")."
+              },
+              "linkUrl": {
+                "type": "string",
+                "format": "uri",
+                "description": "Make the text a hyperlink pointing to this URL."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Optional: Text styles to apply."
+          },
+          "paragraphStyle": {
+            "type": "object",
+            "properties": {
+              "alignment": {
+                "type": "string",
+                "enum": [
+                  "START",
+                  "END",
+                  "CENTER",
+                  "JUSTIFIED"
+                ],
+                "description": "Paragraph alignment. START=left for LTR languages, END=right for LTR languages."
+              },
+              "indentStart": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Left indentation in points."
+              },
+              "indentEnd": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Right indentation in points."
+              },
+              "spaceAbove": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Space before the paragraph in points."
+              },
+              "spaceBelow": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Space after the paragraph in points."
+              },
+              "namedStyleType": {
+                "type": "string",
+                "enum": [
+                  "NORMAL_TEXT",
+                  "TITLE",
+                  "SUBTITLE",
+                  "HEADING_1",
+                  "HEADING_2",
+                  "HEADING_3",
+                  "HEADING_4",
+                  "HEADING_5",
+                  "HEADING_6"
+                ],
+                "description": "Apply a built-in named paragraph style (e.g., HEADING_1)."
+              },
+              "keepWithNext": {
+                "type": "boolean",
+                "description": "Keep this paragraph together with the next one on the same page."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Optional: Paragraph styles (like alignment) to apply."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "editTableCell"
+    },
+    {
+      "description": "Inserts a new row into a table in a Google Document. Requires the table start index (use readGoogleDoc with format: json to find it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document."
+          },
+          "tableStartIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Start index of the table in the document. Use readGoogleDoc with format: json to find this."
+          },
+          "rowIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based row index. The new row will be inserted relative to this row."
+          },
+          "insertAbove": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, insert above the specified row instead of below."
+          }
+        },
+        "required": [
+          "documentId",
+          "tableStartIndex",
+          "rowIndex"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertDocTableRow"
+    },
+    {
+      "description": "Deletes a row from a table in a Google Document. Requires the table start index (use readGoogleDoc with format: json to find it).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document."
+          },
+          "tableStartIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Start index of the table in the document."
+          },
+          "rowIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based index of the row to delete."
+          }
+        },
+        "required": [
+          "documentId",
+          "tableStartIndex",
+          "rowIndex"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteDocTableRow"
+    },
+    {
+      "description": "Inserts a page break at the specified index.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the page break should be inserted."
+          }
+        },
+        "required": [
+          "documentId",
+          "index"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertPageBreak"
+    },
+    {
+      "description": "Inserts an inline image into a Google Document from a publicly accessible URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "imageUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Publicly accessible URL to the image (must be http:// or https://)."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the image should be inserted."
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Optional: Width of the image in points."
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Optional: Height of the image in points."
+          }
+        },
+        "required": [
+          "documentId",
+          "imageUrl",
+          "index"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertImageFromUrl"
+    },
+    {
+      "description": "Uploads a local image file to Google Drive and inserts it into a Google Document. The image will be uploaded to the same folder as the document (or optionally to a specified folder).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "localImagePath": {
+            "type": "string",
+            "description": "Absolute path to the local image file (supports .jpg, .jpeg, .png, .gif, .bmp, .webp, .svg)."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the image should be inserted in the document."
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Optional: Width of the image in points."
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Optional: Height of the image in points."
+          },
+          "uploadToSameFolder": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, uploads the image to the same folder as the document. If false, uploads to Drive root."
+          }
+        },
+        "required": [
+          "documentId",
+          "localImagePath",
+          "index"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertLocalImage"
+    },
+    {
+      "description": "EXPERIMENTAL: Attempts to detect paragraphs that look like lists (e.g., starting with -, *, 1.) and convert them to proper Google Docs bulleted or numbered lists. Best used on specific sections.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "range": {
+            "type": "object",
+            "properties": {
+              "startIndex": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional: The starting index of the text range (inclusive, starts from 1). If omitted, might apply to a found element or whole paragraph."
+              },
+              "endIndex": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Optional: The ending index of the text range (exclusive). If omitted, might apply to a found element or whole paragraph."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Optional: Limit the fixing process to a specific range."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "fixListFormatting"
+    },
+    {
+      "description": "Lists all comments in a Google Document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listComments"
+    },
+    {
+      "description": "Gets a specific comment with its full thread of replies.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "commentId": {
+            "type": "string",
+            "description": "The ID of the comment to retrieve"
+          }
+        },
+        "required": [
+          "documentId",
+          "commentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getComment"
+    },
+    {
+      "description": "Adds a comment anchored to a specific text range in the document. NOTE: Due to Google API limitations, comments created programmatically appear in the \"All Comments\" list but are not visibly anchored to text in the document UI (they show \"original content deleted\"). However, replies, resolve, and delete operations work on all comments including manually-created ones.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "startIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The starting index of the text range (inclusive, starts from 1)."
+          },
+          "endIndex": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The ending index of the text range (exclusive)."
+          },
+          "commentText": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The content of the comment."
+          }
+        },
+        "required": [
+          "documentId",
+          "startIndex",
+          "endIndex",
+          "commentText"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addComment"
+    },
+    {
+      "description": "Adds a reply to an existing comment.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "commentId": {
+            "type": "string",
+            "description": "The ID of the comment to reply to"
+          },
+          "replyText": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The content of the reply"
+          }
+        },
+        "required": [
+          "documentId",
+          "commentId",
+          "replyText"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "replyToComment"
+    },
+    {
+      "description": "Marks a comment as resolved. NOTE: Due to Google API limitations, the Drive API does not support resolving comments on Google Docs files. This operation will attempt to update the comment but the resolved status may not persist in the UI. Comments can be resolved manually in the Google Docs interface.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "commentId": {
+            "type": "string",
+            "description": "The ID of the comment to resolve"
+          }
+        },
+        "required": [
+          "documentId",
+          "commentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "resolveComment"
+    },
+    {
+      "description": "Deletes a comment from the document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "commentId": {
+            "type": "string",
+            "description": "The ID of the comment to delete"
+          }
+        },
+        "required": [
+          "documentId",
+          "commentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteComment"
+    },
+    {
+      "description": "Finds elements (paragraphs, tables, etc.) based on various criteria. (Not Implemented)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "textQuery": {
+            "type": "string"
+          },
+          "elementType": {
+            "type": "string",
+            "enum": [
+              "paragraph",
+              "table",
+              "list",
+              "image"
+            ]
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "findElement"
+    },
+    {
+      "description": "Finds specific text within a Google Document and applies character formatting (bold, italics, color, etc.) to the specified instance.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document."
+          },
+          "textToFind": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The exact text string to find and format."
+          },
+          "matchInstance": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Which instance of the text to format (1st, 2nd, etc.). Defaults to 1."
+          },
+          "bold": {
+            "type": "boolean",
+            "description": "Apply bold formatting."
+          },
+          "italic": {
+            "type": "boolean",
+            "description": "Apply italic formatting."
+          },
+          "underline": {
+            "type": "boolean",
+            "description": "Apply underline formatting."
+          },
+          "strikethrough": {
+            "type": "boolean",
+            "description": "Apply strikethrough formatting."
+          },
+          "fontSize": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Set font size (in points, e.g., 12)."
+          },
+          "fontFamily": {
+            "type": "string",
+            "description": "Set font family (e.g., \"Arial\", \"Times New Roman\")."
+          },
+          "foregroundColor": {
+            "type": "string",
+            "description": "Set text color using hex format (e.g., \"#FF0000\")."
+          },
+          "backgroundColor": {
+            "type": "string",
+            "description": "Set text background color using hex format (e.g., \"#FFFF00\")."
+          },
+          "linkUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Make the text a hyperlink pointing to this URL."
+          }
+        },
+        "required": [
+          "documentId",
+          "textToFind"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "formatMatchingText"
+    },
+    {
+      "description": "Lists Google Documents from your Google Drive with optional filtering. Supports searching by name, content, or both.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Maximum number of documents to return (1-100)."
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query to filter documents by name or content."
+          },
+          "searchIn": {
+            "type": "string",
+            "enum": [
+              "name",
+              "content",
+              "both"
+            ],
+            "default": "name",
+            "description": "Where to search when query is provided: document name, content, or both. Note: content/both searches cannot be sorted."
+          },
+          "orderBy": {
+            "type": "string",
+            "enum": [
+              "name",
+              "modifiedTime",
+              "createdTime"
+            ],
+            "default": "modifiedTime",
+            "description": "Sort order for results. Ignored when searchIn is \"content\" or \"both\" (Google API limitation)."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listGoogleDocs"
+    },
+    {
+      "description": "Searches for Google Documents by name, content, or other criteria.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "searchQuery": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Search term to find in document names or content."
+          },
+          "searchIn": {
+            "type": "string",
+            "enum": [
+              "name",
+              "content",
+              "both"
+            ],
+            "default": "both",
+            "description": "Where to search: document names, content, or both."
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "Maximum number of results to return."
+          },
+          "modifiedAfter": {
+            "type": "string",
+            "description": "Only return documents modified after this date (ISO 8601 format, e.g., \"2024-01-01\")."
+          }
+        },
+        "required": [
+          "searchQuery"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "searchGoogleDocs"
+    },
+    {
+      "description": "Gets the most recently modified Google Documents.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10,
+            "description": "Maximum number of recent documents to return."
+          },
+          "daysBack": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 365,
+            "default": 30,
+            "description": "Only show documents modified within this many days."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getRecentGoogleDocs"
+    },
+    {
+      "description": "Gets detailed information about a specific Google Document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          }
+        },
+        "required": [
+          "documentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getDocumentInfo"
+    },
+    {
+      "description": "Creates a new folder in Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name for the new folder."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "Parent folder ID. If not provided, creates folder in Drive root."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createFolder"
+    },
+    {
+      "description": "Lists the contents of a specific folder in Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "folderId": {
+            "type": "string",
+            "description": "ID of the folder to list contents of. Use \"root\" for the root Drive folder."
+          },
+          "includeSubfolders": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include subfolders in results."
+          },
+          "includeFiles": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include files in results."
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 50,
+            "description": "Maximum number of items to return."
+          }
+        },
+        "required": [
+          "folderId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listFolderContents"
+    },
+    {
+      "description": "Recursively lists all folders in Google Drive as a tree structure. Only returns folders, not files.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "folderId": {
+            "type": "string",
+            "default": "root",
+            "description": "ID of the folder to start from. Defaults to \"root\"."
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 5,
+            "description": "Maximum depth to traverse (1-10). Defaults to 5."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listAllFolders"
+    },
+    {
+      "description": "Gets detailed information about a specific folder in Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "folderId": {
+            "type": "string",
+            "description": "ID of the folder to get information about."
+          }
+        },
+        "required": [
+          "folderId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getFolderInfo"
+    },
+    {
+      "description": "Moves a file or folder to a different location in Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "ID of the file or folder to move."
+          },
+          "newParentId": {
+            "type": "string",
+            "description": "ID of the destination folder. Use \"root\" for Drive root."
+          },
+          "removeFromAllParents": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, removes from all current parents. If false, adds to new parent while keeping existing parents."
+          }
+        },
+        "required": [
+          "fileId",
+          "newParentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "moveFile"
+    },
+    {
+      "description": "Creates a copy of a Google Drive file or document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "ID of the file to copy."
+          },
+          "newName": {
+            "type": "string",
+            "description": "Name for the copied file. If not provided, will use \"Copy of [original name]\"."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of folder where copy should be placed. If not provided, places in same location as original."
+          }
+        },
+        "required": [
+          "fileId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "copyFile"
+    },
+    {
+      "description": "Renames a file or folder in Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "ID of the file or folder to rename."
+          },
+          "newName": {
+            "type": "string",
+            "minLength": 1,
+            "description": "New name for the file or folder."
+          }
+        },
+        "required": [
+          "fileId",
+          "newName"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "renameFile"
+    },
+    {
+      "description": "Permanently deletes a file or folder from Google Drive.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "ID of the file or folder to delete."
+          },
+          "skipTrash": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, permanently deletes the file. If false, moves to trash (can be restored)."
+          }
+        },
+        "required": [
+          "fileId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteFile"
+    },
+    {
+      "description": "Uploads a local file (PDF, DOCX, images, etc.) to a Google Drive folder. Returns the file ID and web view link.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "localFilePath": {
+            "type": "string",
+            "description": "Absolute path to the local file to upload."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of the Drive folder to upload into. If not provided, uploads to Drive root."
+          },
+          "fileName": {
+            "type": "string",
+            "description": "Optional custom name for the file in Drive. If not provided, uses the local file name."
+          }
+        },
+        "required": [
+          "localFilePath"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "uploadFile"
+    },
+    {
+      "description": "Downloads a file from Google Drive to the local filesystem. For Google Docs/Sheets/Slides (native Google formats), exports them to appropriate Office formats (docx, xlsx, pptx) by default. Use exportFormat to choose a different format like PDF. For regular uploaded files (PDF, images, etc.), downloads them directly.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "Google Drive file ID to download."
+          },
+          "savePath": {
+            "type": "string",
+            "description": "Absolute path to the local directory where the file should be saved."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Optional override for the filename. If not provided, uses the original file name from Drive."
+          },
+          "exportFormat": {
+            "type": "string",
+            "enum": [
+              "default",
+              "pdf",
+              "docx",
+              "xlsx",
+              "csv",
+              "pptx",
+              "txt"
+            ],
+            "default": "default",
+            "description": "Export format for Google-native files. \"default\" uses docx/xlsx/pptx. For Google Docs: pdf, docx, txt. For Sheets: pdf, xlsx, csv. For Slides: pdf, pptx."
+          }
+        },
+        "required": [
+          "fileId",
+          "savePath"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "downloadFile"
+    },
+    {
+      "description": "Shares a Google Drive file with a specific user by email address.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "Google Drive file ID to share."
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Email address to share with."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "reader",
+              "commenter",
+              "writer"
+            ],
+            "description": "Permission level."
+          },
+          "sendNotification": {
+            "type": "boolean",
+            "default": true,
+            "description": "Send email notification to the recipient."
+          },
+          "message": {
+            "type": "string",
+            "description": "Optional message to include in the notification email."
+          }
+        },
+        "required": [
+          "fileId",
+          "email",
+          "role"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "shareFile"
+    },
+    {
+      "description": "Makes a Google Drive file publicly accessible via link.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "Google Drive file ID to make public."
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "reader",
+              "commenter"
+            ],
+            "default": "reader",
+            "description": "Public permission level."
+          }
+        },
+        "required": [
+          "fileId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "makeFilePublic"
+    },
+    {
+      "description": "Lists all permissions (sharing settings) for a Google Drive file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "fileId": {
+            "type": "string",
+            "description": "Google Drive file ID to check permissions for."
+          }
+        },
+        "required": [
+          "fileId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listFilePermissions"
+    },
+    {
+      "description": "Creates a new Google Document.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Title for the new document."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of folder where document should be created. If not provided, creates in Drive root."
+          },
+          "initialContent": {
+            "type": "string",
+            "description": "Initial text content to add to the document."
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createDocument"
+    },
+    {
+      "description": "Creates a new Google Document from an existing document template.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "description": "ID of the template document to copy from."
+          },
+          "newTitle": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Title for the new document."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of folder where document should be created. If not provided, creates in Drive root."
+          },
+          "replacements": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Key-value pairs for text replacements in the template (e.g., {\"{{NAME}}\": \"John Doe\", \"{{DATE}}\": \"2024-01-01\"})."
+          }
+        },
+        "required": [
+          "templateId",
+          "newTitle"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createFromTemplate"
+    },
+    {
+      "description": "Reads data from a specific range in a Google Spreadsheet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          },
+          "range": {
+            "type": "string",
+            "description": "A1 notation range to read (e.g., \"A1:B10\" or \"Sheet1!A1:B10\")."
+          },
+          "valueRenderOption": {
+            "type": "string",
+            "enum": [
+              "FORMATTED_VALUE",
+              "UNFORMATTED_VALUE",
+              "FORMULA"
+            ],
+            "default": "FORMATTED_VALUE",
+            "description": "How values should be rendered in the output."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "range"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "readSpreadsheet"
+    },
+    {
+      "description": "Writes data to a specific range in a Google Spreadsheet. Overwrites existing data in the range.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          },
+          "range": {
+            "type": "string",
+            "description": "A1 notation range to write to (e.g., \"A1:B2\" or \"Sheet1!A1:B2\")."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "array"
+            },
+            "description": "2D array of values to write. Each inner array represents a row."
+          },
+          "valueInputOption": {
+            "type": "string",
+            "enum": [
+              "RAW",
+              "USER_ENTERED"
+            ],
+            "default": "USER_ENTERED",
+            "description": "How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "range",
+          "values"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "writeSpreadsheet"
+    },
+    {
+      "description": "Appends rows of data to the end of a sheet in a Google Spreadsheet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          },
+          "range": {
+            "type": "string",
+            "description": "A1 notation range indicating where to append (e.g., \"A1\" or \"Sheet1!A1\"). Data will be appended starting from this range."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "array"
+            },
+            "description": "2D array of values to append. Each inner array represents a row."
+          },
+          "valueInputOption": {
+            "type": "string",
+            "enum": [
+              "RAW",
+              "USER_ENTERED"
+            ],
+            "default": "USER_ENTERED",
+            "description": "How input data should be interpreted. RAW: values are stored as-is. USER_ENTERED: values are parsed as if typed by a user."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "range",
+          "values"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "appendSpreadsheetRows"
+    },
+    {
+      "description": "Clears all values from a specific range in a Google Spreadsheet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          },
+          "range": {
+            "type": "string",
+            "description": "A1 notation range to clear (e.g., \"A1:B10\" or \"Sheet1!A1:B10\")."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "range"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "clearSpreadsheetRange"
+    },
+    {
+      "description": "Gets detailed information about a Google Spreadsheet including all sheets/tabs.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          }
+        },
+        "required": [
+          "spreadsheetId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getSpreadsheetInfo"
+    },
+    {
+      "description": "Adds a new sheet/tab to an existing Google Spreadsheet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet (from the URL)."
+          },
+          "sheetTitle": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Title for the new sheet/tab."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "sheetTitle"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addSpreadsheetSheet"
+    },
+    {
+      "description": "Formats cells in a Google Spreadsheet range (background color, text color, bold, italic, font size, alignment).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "spreadsheetId": {
+            "type": "string",
+            "description": "The ID of the Google Spreadsheet."
+          },
+          "range": {
+            "type": "string",
+            "description": "Cell range in A1 notation (e.g., \"A1:B5\" or \"Sheet1!A1:C3\")."
+          },
+          "backgroundColor": {
+            "type": "string",
+            "description": "Background color as hex string (e.g., \"#FF0000\")."
+          },
+          "foregroundColor": {
+            "type": "string",
+            "description": "Text color as hex string (e.g., \"#000000\")."
+          },
+          "bold": {
+            "type": "boolean",
+            "description": "Whether to bold the text."
+          },
+          "italic": {
+            "type": "boolean",
+            "description": "Whether to italicize the text."
+          },
+          "fontSize": {
+            "type": "number",
+            "description": "Font size in points."
+          },
+          "horizontalAlignment": {
+            "type": "string",
+            "enum": [
+              "LEFT",
+              "CENTER",
+              "RIGHT"
+            ],
+            "description": "Horizontal text alignment."
+          },
+          "verticalAlignment": {
+            "type": "string",
+            "enum": [
+              "TOP",
+              "MIDDLE",
+              "BOTTOM"
+            ],
+            "description": "Vertical text alignment."
+          }
+        },
+        "required": [
+          "spreadsheetId",
+          "range"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "formatSpreadsheetCells"
+    },
+    {
+      "description": "Creates a new Google Spreadsheet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Title for the new spreadsheet."
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of folder where spreadsheet should be created. If not provided, creates in Drive root."
+          },
+          "initialData": {
+            "type": "array",
+            "items": {
+              "type": "array"
+            },
+            "description": "Optional initial data to populate in the first sheet. Each inner array represents a row."
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createSpreadsheet"
+    },
+    {
+      "description": "Lists Google Spreadsheets from your Google Drive with optional filtering.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Maximum number of spreadsheets to return (1-100)."
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query to filter spreadsheets by name or content."
+          },
+          "orderBy": {
+            "type": "string",
+            "enum": [
+              "name",
+              "modifiedTime",
+              "createdTime"
+            ],
+            "default": "modifiedTime",
+            "description": "Sort order for results."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listGoogleSheets"
+    },
+    {
+      "description": "Creates a new Google Document with properly formatted content. Instead of raw text, you provide structured sections with formatting types (headings, bullets, etc.) and the tool applies proper Google Docs formatting automatically. This prevents auto-list conversion issues and ensures clean, professional documents.\n\nIMPORTANT: Use this instead of createDocument + insertText when you need formatted content.\n\nExample content array:\n[\n  { \"type\": \"title\", \"text\": \"My Document Title\" },\n  { \"type\": \"heading1\", \"text\": \"Introduction\", \"color\": \"#1565C0\" },\n  { \"type\": \"normal\", \"text\": \"This is regular paragraph text.\" },\n  { \"type\": \"bullet\", \"text\": \"First bullet point\" },\n  { \"type\": \"bullet\", \"text\": \"Second bullet point\" },\n  { \"type\": \"heading2\", \"text\": \"Section Two\" },\n  { \"type\": \"normal\", \"text\": \"More content here.\", \"bold\": true }\n]",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Title for the new document (appears in Drive)."
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "heading1",
+                    "heading2",
+                    "heading3",
+                    "heading4",
+                    "title",
+                    "subtitle",
+                    "normal",
+                    "bullet",
+                    "numbered"
+                  ],
+                  "description": "The type of content section"
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The text content for this section"
+                },
+                "bold": {
+                  "type": "boolean",
+                  "description": "Apply bold to the entire section"
+                },
+                "italic": {
+                  "type": "boolean",
+                  "description": "Apply italic to the entire section"
+                },
+                "color": {
+                  "type": "string",
+                  "description": "Text color in hex format (e.g., \"#FF0000\" for red)"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of formatted content sections"
+          },
+          "parentFolderId": {
+            "type": "string",
+            "description": "ID of folder where document should be created. If not provided, creates in Drive root."
+          }
+        },
+        "required": [
+          "title",
+          "content"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createFormattedDocument"
+    },
+    {
+      "description": "Inserts properly formatted content into an existing Google Document at a specified index. Uses structured sections with formatting types (headings, bullets, etc.) instead of raw text, ensuring clean formatting without auto-list conversion issues.\n\nIMPORTANT: Use this instead of insertText when you need formatted content.\n\nExample content array:\n[\n  { \"type\": \"heading1\", \"text\": \"New Section\", \"color\": \"#1565C0\" },\n  { \"type\": \"normal\", \"text\": \"This is paragraph text.\" },\n  { \"type\": \"bullet\", \"text\": \"Bullet point one\" },\n  { \"type\": \"bullet\", \"text\": \"Bullet point two\" }\n]",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The index (1-based) where the content should be inserted."
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "heading1",
+                    "heading2",
+                    "heading3",
+                    "heading4",
+                    "title",
+                    "subtitle",
+                    "normal",
+                    "bullet",
+                    "numbered"
+                  ],
+                  "description": "The type of content section"
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The text content for this section"
+                },
+                "bold": {
+                  "type": "boolean",
+                  "description": "Apply bold to the entire section"
+                },
+                "italic": {
+                  "type": "boolean",
+                  "description": "Apply italic to the entire section"
+                },
+                "color": {
+                  "type": "string",
+                  "description": "Text color in hex format (e.g., \"#FF0000\" for red)"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of formatted content sections to insert"
+          }
+        },
+        "required": [
+          "documentId",
+          "index",
+          "content"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertFormattedContent"
+    },
+    {
+      "description": "Completely replaces the content of an existing Google Document with properly formatted content. Useful for regenerating a document with clean formatting.\n\nIMPORTANT: This will DELETE all existing content and replace it with the new formatted content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "heading1",
+                    "heading2",
+                    "heading3",
+                    "heading4",
+                    "title",
+                    "subtitle",
+                    "normal",
+                    "bullet",
+                    "numbered"
+                  ],
+                  "description": "The type of content section"
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The text content for this section"
+                },
+                "bold": {
+                  "type": "boolean",
+                  "description": "Apply bold to the entire section"
+                },
+                "italic": {
+                  "type": "boolean",
+                  "description": "Apply italic to the entire section"
+                },
+                "color": {
+                  "type": "string",
+                  "description": "Text color in hex format (e.g., \"#FF0000\" for red)"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of formatted content sections to replace the document with"
+          }
+        },
+        "required": [
+          "documentId",
+          "content"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "replaceDocumentContent"
+    },
+    {
+      "description": "Finds a document section by its heading text and replaces the content below it (or the heading + content) with new formatted content. This is the best way to update a specific section of a document without affecting the rest.\n\nThe tool finds the heading by exact text match, determines the section boundary (up to the next heading of equal or higher level), deletes that range, and inserts the new formatted content in its place.\n\nExample: To replace everything under \"Block 2: Activities\" with new content:\n{\n  \"documentId\": \"abc123\",\n  \"headingText\": \"Block 2: Activities\",\n  \"replaceHeading\": false,\n  \"content\": [\n    { \"type\": \"normal\", \"text\": \"New activity description here.\" },\n    { \"type\": \"bullet\", \"text\": \"Activity step 1\" },\n    { \"type\": \"bullet\", \"text\": \"Activity step 2\" }\n  ]\n}",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "The ID of the Google Document (from the URL)."
+          },
+          "headingText": {
+            "type": "string",
+            "description": "The heading text to find (exact match, trimmed)"
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "heading1",
+                    "heading2",
+                    "heading3",
+                    "heading4",
+                    "title",
+                    "subtitle",
+                    "normal",
+                    "bullet",
+                    "numbered"
+                  ],
+                  "description": "The type of content section"
+                },
+                "text": {
+                  "type": "string",
+                  "description": "The text content for this section"
+                },
+                "bold": {
+                  "type": "boolean",
+                  "description": "Apply bold to the entire section"
+                },
+                "italic": {
+                  "type": "boolean",
+                  "description": "Apply italic to the entire section"
+                },
+                "color": {
+                  "type": "string",
+                  "description": "Text color in hex format (e.g., \"#FF0000\" for red)"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Array of formatted content sections to insert"
+          },
+          "replaceHeading": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, also replaces the heading itself. If false (default), only replaces content below the heading."
+          }
+        },
+        "required": [
+          "documentId",
+          "headingText",
+          "content"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "updateDocumentSection"
+    },
+    {
+      "description": "Lists Google Slides presentations from your Google Drive with optional filtering.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Maximum number of presentations to return (1-100)."
+          },
+          "query": {
+            "type": "string",
+            "description": "Search query to filter presentations by name."
+          },
+          "orderBy": {
+            "type": "string",
+            "enum": [
+              "name",
+              "modifiedTime",
+              "createdTime"
+            ],
+            "default": "modifiedTime",
+            "description": "Sort order for results."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listGoogleSlides"
+    },
+    {
+      "description": "Gets metadata and content of a Google Slides presentation including title, slide count, dimensions, and optionally full content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the Google Slides presentation (from URL: docs.google.com/presentation/d/PRESENTATION_ID/edit)."
+          },
+          "includeContent": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, includes detailed content of all slides."
+          }
+        },
+        "required": [
+          "presentationId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getPresentation"
+    },
+    {
+      "description": "Lists all slides in a Google Slides presentation with their IDs and basic info.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the Google Slides presentation."
+          }
+        },
+        "required": [
+          "presentationId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "listSlides"
+    },
+    {
+      "description": "Gets detailed content of one or more slides including all elements. Can fetch a single slide by ID, or multiple slides by index range.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the Google Slides presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of a single slide to retrieve. Use this OR startIndex/endIndex, not both."
+          },
+          "startIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based start index for fetching a range of slides. Use with endIndex."
+          },
+          "endIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based end index (exclusive) for fetching a range of slides. Use with startIndex."
+          }
+        },
+        "required": [
+          "presentationId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "getSlide"
+    },
+    {
+      "description": "Analyzes a slide to map dimensions, element positions, and available space. Use this BEFORE adding elements to understand the layout.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the Google Slides presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide to analyze."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "mapSlide"
+    },
+    {
+      "description": "Creates a new Google Slides presentation. Returns the new presentation ID and URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "The title for the new presentation."
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "createPresentation"
+    },
+    {
+      "description": "Adds a new slide to a presentation. Returns the new slide ID.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "insertionIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional 0-based index where to insert the slide. Omit to add at the end."
+          },
+          "predefinedLayout": {
+            "type": "string",
+            "enum": [
+              "BLANK",
+              "CAPTION_ONLY",
+              "TITLE",
+              "TITLE_AND_BODY",
+              "TITLE_AND_TWO_COLUMNS",
+              "TITLE_ONLY",
+              "SECTION_HEADER",
+              "SECTION_TITLE_AND_DESCRIPTION",
+              "ONE_COLUMN_TEXT",
+              "MAIN_POINT",
+              "BIG_NUMBER"
+            ],
+            "description": "Optional predefined layout type. Defaults to BLANK if not specified."
+          }
+        },
+        "required": [
+          "presentationId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addSlide"
+    },
+    {
+      "description": "Duplicates an existing slide in the presentation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide to duplicate."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "duplicateSlide"
+    },
+    {
+      "description": "Adds a text box to a slide at the specified position with optional initial text and styling.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide to add the text box to."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "description": "X position (left edge) in points from top-left corner."
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Y position (top edge) in points from top-left corner."
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Width of the text box in points."
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Height of the text box in points."
+          },
+          "text": {
+            "type": "string",
+            "description": "Optional initial text content for the text box."
+          },
+          "fontSize": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Font size in points (e.g., 12, 14, 18). If not specified, uses Google Slides default."
+          },
+          "fontFamily": {
+            "type": "string",
+            "description": "Font family name (e.g., \"Arial\", \"Times New Roman\", \"Roboto\")."
+          },
+          "bold": {
+            "type": "boolean",
+            "description": "Whether the text should be bold."
+          },
+          "italic": {
+            "type": "boolean",
+            "description": "Whether the text should be italic."
+          },
+          "textColor": {
+            "type": "string",
+            "pattern": "^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+            "description": "Text color in hex format (e.g., \"#000000\" for black, \"#FF0000\" for red)."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addTextBox"
+    },
+    {
+      "description": "Adds a shape (rectangle, ellipse, etc.) to a slide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide."
+          },
+          "shapeType": {
+            "type": "string",
+            "enum": [
+              "RECTANGLE",
+              "ROUND_RECTANGLE",
+              "ELLIPSE",
+              "TRIANGLE",
+              "RIGHT_TRIANGLE",
+              "PARALLELOGRAM",
+              "TRAPEZOID",
+              "PENTAGON",
+              "HEXAGON",
+              "HEPTAGON",
+              "OCTAGON",
+              "STAR_4",
+              "STAR_5",
+              "STAR_6",
+              "STAR_8",
+              "STAR_10",
+              "STAR_12",
+              "ARROW_EAST",
+              "ARROW_NORTH",
+              "ARROW_NORTH_EAST",
+              "CLOUD",
+              "HEART",
+              "PLUS"
+            ],
+            "description": "The type of shape to create."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "description": "X position in points."
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Y position in points."
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Width in points."
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Height in points."
+          },
+          "fillColor": {
+            "type": "string",
+            "pattern": "^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+            "description": "Optional fill color in hex format (e.g., \"#FF0000\")."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "shapeType",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addShape"
+    },
+    {
+      "description": "Adds an image to a slide from a publicly accessible URL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide."
+          },
+          "imageUrl": {
+            "type": "string",
+            "format": "uri",
+            "description": "Publicly accessible URL of the image to insert."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "description": "X position in points."
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Y position in points."
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Width in points."
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Height in points."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "imageUrl",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addImage"
+    },
+    {
+      "description": "Adds a table to a slide with the specified number of rows and columns.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide."
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of rows (minimum 1)."
+          },
+          "columns": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of columns (minimum 1)."
+          },
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "description": "X position in points."
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Y position in points."
+          },
+          "width": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Width in points."
+          },
+          "height": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Height in points."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "rows",
+          "columns",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "addTable"
+    },
+    {
+      "description": "Edits the text content and optional styling of a specific cell in a Slides table. Replaces all existing cell text with the new text.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "tableObjectId": {
+            "type": "string",
+            "description": "The object ID of the table element (from getSlide or addTable)."
+          },
+          "rowIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based row index of the cell to edit."
+          },
+          "columnIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "0-based column index of the cell to edit."
+          },
+          "text": {
+            "type": "string",
+            "description": "The new text content for the cell."
+          },
+          "fontSize": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Font size in points (e.g., 12, 14, 18)."
+          },
+          "fontFamily": {
+            "type": "string",
+            "description": "Font family name (e.g., \"Arial\", \"Times New Roman\", \"Roboto\")."
+          },
+          "bold": {
+            "type": "boolean",
+            "description": "Whether the text should be bold."
+          },
+          "italic": {
+            "type": "boolean",
+            "description": "Whether the text should be italic."
+          },
+          "textColor": {
+            "type": "string",
+            "pattern": "^#?([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+            "description": "Text color in hex format (e.g., \"#000000\" for black, \"#FF0000\" for red)."
+          }
+        },
+        "required": [
+          "presentationId",
+          "tableObjectId",
+          "rowIndex",
+          "columnIndex",
+          "text"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "editSlideTableCell"
+    },
+    {
+      "description": "Deletes a slide from the presentation. Cannot delete the only slide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide to delete."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteSlide"
+    },
+    {
+      "description": "Deletes an element (shape, image, table) from a slide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "objectId": {
+            "type": "string",
+            "description": "The object ID of the element to delete."
+          }
+        },
+        "required": [
+          "presentationId",
+          "objectId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "deleteElement"
+    },
+    {
+      "description": "Updates the speaker notes for a slide.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide."
+          },
+          "notes": {
+            "type": "string",
+            "description": "The speaker notes text content."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "notes"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "updateSpeakerNotes"
+    },
+    {
+      "description": "Moves a slide to a new position in the presentation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "pageObjectId": {
+            "type": "string",
+            "description": "The object ID of the slide to move."
+          },
+          "newIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The new 0-based index position for the slide."
+          }
+        },
+        "required": [
+          "presentationId",
+          "pageObjectId",
+          "newIndex"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "moveSlide"
+    },
+    {
+      "description": "Inserts or replaces text in a shape or text box element.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "presentationId": {
+            "type": "string",
+            "description": "The ID of the presentation."
+          },
+          "objectId": {
+            "type": "string",
+            "description": "The object ID of the shape/text box to insert text into."
+          },
+          "text": {
+            "type": "string",
+            "description": "The text to insert."
+          },
+          "insertionIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optional index where to insert text (0 for beginning). Omit to replace all text."
+          },
+          "replaceAll": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, deletes all existing text before inserting new text."
+          }
+        },
+        "required": [
+          "presentationId",
+          "objectId",
+          "text"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "insertTextInElement"
+    },
+    {
+      "description": "Sends a new email with optional attachments. Supports plain text, HTML, and multipart/alternative formats.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of recipient email addresses."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of CC recipient email addresses."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of BCC recipient email addresses."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The email subject line."
+          },
+          "body": {
+            "type": "string",
+            "description": "The email body content (plain text or HTML based on mimeType)."
+          },
+          "htmlBody": {
+            "type": "string",
+            "description": "HTML version of the email body (for multipart/alternative)."
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/html",
+              "multipart/alternative"
+            ],
+            "default": "text/plain",
+            "description": "Content type of the email body."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of file paths to attach to the email."
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Thread ID to reply to (maintains conversation)."
+          },
+          "inReplyTo": {
+            "type": "string",
+            "description": "Message-ID header of the email being replied to."
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "send_email"
+    },
+    {
+      "description": "Creates a new email draft with optional attachments.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of recipient email addresses."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of CC recipient email addresses."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of BCC recipient email addresses."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The email subject line."
+          },
+          "body": {
+            "type": "string",
+            "description": "The email body content (plain text or HTML based on mimeType)."
+          },
+          "htmlBody": {
+            "type": "string",
+            "description": "HTML version of the email body (for multipart/alternative)."
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/html",
+              "multipart/alternative"
+            ],
+            "default": "text/plain",
+            "description": "Content type of the email body."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of file paths to attach to the email."
+          },
+          "threadId": {
+            "type": "string",
+            "description": "Thread ID to reply to (maintains conversation)."
+          },
+          "inReplyTo": {
+            "type": "string",
+            "description": "Message-ID header of the email being replied to."
+          }
+        },
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "draft_email"
+    },
+    {
+      "description": "Retrieves the content of a specific email message including headers, body, and attachment information.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "read_email"
+    },
+    {
+      "description": "Searches for emails using Gmail search syntax (e.g., \"from:user@example.com\", \"is:unread\", \"subject:meeting\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Gmail search query using Gmail search syntax (e.g., \"from:user@example.com\", \"is:unread\", \"subject:meeting\")."
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 10,
+            "description": "Maximum number of results to return (1-500)."
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Page token for pagination."
+          },
+          "includeSpamTrash": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include messages from SPAM and TRASH in results."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "search_emails"
+    },
+    {
+      "description": "Modifies email labels (add or remove). Use to move emails between folders, mark as read/unread, star/unstar.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          },
+          "addLabelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of label IDs to add to the message."
+          },
+          "removeLabelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of label IDs to remove from the message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "modify_email"
+    },
+    {
+      "description": "Permanently deletes an email. This action cannot be undone. Use trash_email for recoverable deletion.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "delete_email"
+    },
+    {
+      "description": "Downloads an email attachment to a specified location.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          },
+          "attachmentId": {
+            "type": "string",
+            "description": "The ID of the attachment to download."
+          },
+          "savePath": {
+            "type": "string",
+            "description": "Directory path to save the attachment."
+          },
+          "filename": {
+            "type": "string",
+            "description": "Custom filename for the saved attachment."
+          }
+        },
+        "required": [
+          "messageId",
+          "attachmentId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "download_attachment"
+    },
+    {
+      "description": "Retrieves all available Gmail labels (both system and user-created).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "list_email_labels"
+    },
+    {
+      "description": "Creates a new Gmail label.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name for the new label."
+          },
+          "labelListVisibility": {
+            "type": "string",
+            "enum": [
+              "labelShow",
+              "labelShowIfUnread",
+              "labelHide"
+            ],
+            "description": "Visibility of the label in the label list."
+          },
+          "messageListVisibility": {
+            "type": "string",
+            "enum": [
+              "show",
+              "hide"
+            ],
+            "description": "Whether to show or hide the label in the message list."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "create_label"
+    },
+    {
+      "description": "Updates an existing Gmail label (rename or change visibility).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID of the label to update."
+          },
+          "name": {
+            "type": "string",
+            "description": "New name for the label."
+          },
+          "labelListVisibility": {
+            "type": "string",
+            "enum": [
+              "labelShow",
+              "labelShowIfUnread",
+              "labelHide"
+            ],
+            "description": "Visibility of the label in the label list."
+          },
+          "messageListVisibility": {
+            "type": "string",
+            "enum": [
+              "show",
+              "hide"
+            ],
+            "description": "Whether to show or hide the label in the message list."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "update_label"
+    },
+    {
+      "description": "Deletes a Gmail label. System labels cannot be deleted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "ID of the label to delete."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "delete_label"
+    },
+    {
+      "description": "Gets an existing label by name or creates it if it does not exist. Idempotent operation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Name for the new label."
+          },
+          "labelListVisibility": {
+            "type": "string",
+            "enum": [
+              "labelShow",
+              "labelShowIfUnread",
+              "labelHide"
+            ],
+            "description": "Visibility of the label in the label list."
+          },
+          "messageListVisibility": {
+            "type": "string",
+            "enum": [
+              "show",
+              "hide"
+            ],
+            "description": "Whether to show or hide the label in the message list."
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "get_or_create_label"
+    },
+    {
+      "description": "Modifies labels for multiple emails in batches. More efficient than individual modifications.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "List of message IDs to modify."
+          },
+          "addLabelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of label IDs to add to all messages."
+          },
+          "removeLabelIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "List of label IDs to remove from all messages."
+          },
+          "batchSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 50,
+            "description": "Number of messages to process in each batch."
+          }
+        },
+        "required": [
+          "messageIds"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "batch_modify_emails"
+    },
+    {
+      "description": "Permanently deletes multiple emails in batches. This action cannot be undone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "List of message IDs to delete."
+          },
+          "batchSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 50,
+            "description": "Number of messages to process in each batch."
+          }
+        },
+        "required": [
+          "messageIds"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "batch_delete_emails"
+    },
+    {
+      "description": "Creates a new Gmail filter with custom criteria and actions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "criteria": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "description": "Sender email address to match."
+              },
+              "to": {
+                "type": "string",
+                "description": "Recipient email address to match."
+              },
+              "subject": {
+                "type": "string",
+                "description": "Subject text to match."
+              },
+              "query": {
+                "type": "string",
+                "description": "Gmail search query for advanced matching."
+              },
+              "negatedQuery": {
+                "type": "string",
+                "description": "Query that messages must NOT match."
+              },
+              "hasAttachment": {
+                "type": "boolean",
+                "description": "Match only messages with attachments."
+              },
+              "excludeChats": {
+                "type": "boolean",
+                "description": "Exclude chat messages from matching."
+              },
+              "size": {
+                "type": "integer",
+                "description": "Message size in bytes for size-based filtering."
+              },
+              "sizeComparison": {
+                "type": "string",
+                "enum": [
+                  "unspecified",
+                  "smaller",
+                  "larger"
+                ],
+                "description": "Size comparison operator."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Criteria for matching emails."
+          },
+          "action": {
+            "type": "object",
+            "properties": {
+              "addLabelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Label IDs to add to matching messages."
+              },
+              "removeLabelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Label IDs to remove from matching messages."
+              },
+              "forward": {
+                "type": "string",
+                "format": "email",
+                "description": "Email address to forward matching messages to."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Actions to perform on matching emails."
+          }
+        },
+        "required": [
+          "criteria",
+          "action"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "create_filter"
+    },
+    {
+      "description": "Retrieves all Gmail filters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "list_filters"
+    },
+    {
+      "description": "Gets details of a specific Gmail filter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filterId": {
+            "type": "string",
+            "description": "The ID of the Gmail filter."
+          }
+        },
+        "required": [
+          "filterId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "get_filter"
+    },
+    {
+      "description": "Deletes a Gmail filter.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "filterId": {
+            "type": "string",
+            "description": "The ID of the Gmail filter."
+          }
+        },
+        "required": [
+          "filterId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "delete_filter"
+    },
+    {
+      "description": "Creates a filter using a pre-defined template for common scenarios (fromSender, withSubject, withAttachments, largeEmails, containingText, mailingList).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "template": {
+            "type": "string",
+            "enum": [
+              "fromSender",
+              "withSubject",
+              "withAttachments",
+              "largeEmails",
+              "containingText",
+              "mailingList"
+            ],
+            "description": "Pre-defined filter template type."
+          },
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "senderEmail": {
+                "type": "string",
+                "format": "email",
+                "description": "Sender email for fromSender template."
+              },
+              "subjectText": {
+                "type": "string",
+                "description": "Subject text for withSubject template."
+              },
+              "searchText": {
+                "type": "string",
+                "description": "Search text for containingText template."
+              },
+              "listIdentifier": {
+                "type": "string",
+                "description": "Mailing list identifier for mailingList template."
+              },
+              "sizeInBytes": {
+                "type": "integer",
+                "description": "Size threshold for largeEmails template."
+              },
+              "labelIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Label IDs to apply."
+              },
+              "archive": {
+                "type": "boolean",
+                "description": "Whether to skip the inbox (archive)."
+              },
+              "markAsRead": {
+                "type": "boolean",
+                "description": "Whether to mark as read."
+              },
+              "markImportant": {
+                "type": "boolean",
+                "description": "Whether to mark as important."
+              }
+            },
+            "additionalProperties": false,
+            "description": "Template-specific parameters."
+          }
+        },
+        "required": [
+          "template",
+          "parameters"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "create_filter_from_template"
+    },
+    {
+      "description": "Gets a full email conversation thread with all messages.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "threadId": {
+            "type": "string",
+            "description": "The ID of the Gmail thread/conversation."
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "get_thread"
+    },
+    {
+      "description": "Lists email threads with optional search query.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Gmail search query to filter threads."
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 10,
+            "description": "Maximum number of threads to return."
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Page token for pagination."
+          },
+          "includeSpamTrash": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include threads from SPAM and TRASH."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "list_threads"
+    },
+    {
+      "description": "Sends a reply to an existing email, maintaining the conversation thread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "ID of the message to reply to."
+          },
+          "body": {
+            "type": "string",
+            "description": "Reply message body."
+          },
+          "htmlBody": {
+            "type": "string",
+            "description": "HTML version of the reply body."
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/html",
+              "multipart/alternative"
+            ],
+            "default": "text/plain",
+            "description": "Content type of the reply."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "Additional CC recipients."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "BCC recipients."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "File paths to attach."
+          },
+          "replyAll": {
+            "type": "boolean",
+            "default": false,
+            "description": "Reply to all recipients."
+          }
+        },
+        "required": [
+          "messageId",
+          "body"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "reply_to_email"
+    },
+    {
+      "description": "Forwards an email to new recipients.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "ID of the message to forward."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "Recipients to forward to."
+          },
+          "additionalMessage": {
+            "type": "string",
+            "description": "Additional message to include with the forward."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "CC recipients."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "BCC recipients."
+          }
+        },
+        "required": [
+          "messageId",
+          "to"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "forward_email"
+    },
+    {
+      "description": "Moves an email to trash. Can be restored using untrash_email.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "trash_email"
+    },
+    {
+      "description": "Restores an email from trash.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "untrash_email"
+    },
+    {
+      "description": "Archives an email by removing it from the inbox (keeps in \"All Mail\").",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "archive_email"
+    },
+    {
+      "description": "Marks an email as read.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "mark_as_read"
+    },
+    {
+      "description": "Marks an email as unread.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "description": "The ID of the Gmail message."
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "mark_as_unread"
+    },
+    {
+      "description": "Gets the authenticated Gmail user profile (email address and message counts).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "get_user_profile"
+    },
+    {
+      "description": "Lists all email drafts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 10,
+            "description": "Maximum number of drafts to return."
+          },
+          "pageToken": {
+            "type": "string",
+            "description": "Page token for pagination."
+          }
+        },
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "list_drafts"
+    },
+    {
+      "description": "Gets the content of a specific draft.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "description": "The ID of the Gmail draft."
+          }
+        },
+        "required": [
+          "draftId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "get_draft"
+    },
+    {
+      "description": "Updates an existing draft with new content.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "description": "ID of the draft to update."
+          },
+          "to": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "List of recipient email addresses."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Email subject."
+          },
+          "body": {
+            "type": "string",
+            "description": "Email body content."
+          },
+          "htmlBody": {
+            "type": "string",
+            "description": "HTML version of the email body."
+          },
+          "mimeType": {
+            "type": "string",
+            "enum": [
+              "text/plain",
+              "text/html",
+              "multipart/alternative"
+            ],
+            "default": "text/plain",
+            "description": "Content type of the email."
+          },
+          "cc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "CC recipients."
+          },
+          "bcc": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            },
+            "description": "BCC recipients."
+          }
+        },
+        "required": [
+          "draftId",
+          "to",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "update_draft"
+    },
+    {
+      "description": "Deletes a draft. This action cannot be undone.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "description": "The ID of the Gmail draft."
+          }
+        },
+        "required": [
+          "draftId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "delete_draft"
+    },
+    {
+      "description": "Sends an existing draft as an email.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draftId": {
+            "type": "string",
+            "description": "The ID of the Gmail draft."
+          }
+        },
+        "required": [
+          "draftId"
+        ],
+        "additionalProperties": false,
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "name": "send_draft"
+    }
+  ]
+}

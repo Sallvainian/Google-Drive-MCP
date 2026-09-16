@@ -1,0 +1,14 @@
+{
+  "surfaces": {
+    "full": {
+      "tools": 108,
+      "total_tokens": 18200,
+      "average": 169
+    }
+  },
+  "thresholds": {
+    "per_tool": 1000,
+    "new_tool": 500,
+    "total_growth_pct": 10
+  }
+}

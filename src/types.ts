@@ -344,6 +344,7 @@ export const DownloadAttachmentParameter = MessageIdParameter.extend({
   attachmentId: z.string().describe('The ID of the attachment to download.'),
   savePath: z.string().optional().describe('Directory path to save the attachment.'),
   filename: z.string().optional().describe('Custom filename for the saved attachment.'),
+  overwrite: z.boolean().optional().default(false).describe('Replace an existing file at the destination.'),
 });
 
 // --- Batch Operations ---

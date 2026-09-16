@@ -2,6 +2,7 @@
 import { gmail_v1 } from 'googleapis';
 import { UserError } from 'fastmcp';
 import * as fs from 'fs/promises';
+import { existsSync } from 'fs';
 import * as path from 'path';
 
 type Gmail = gmail_v1.Gmail;
@@ -16,8 +17,109 @@ export function validateEmail(email: string): boolean {
   return EMAIL_REGEX.test(email);
 }
 
+// Quote-aware split so "Last, First" <addr> is one mailbox.
+function splitAddressList(header: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (const ch of header) {
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      current += ch;
+    } else if (ch === ',' && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) {
+        parts.push(trimmed);
+      }
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  const trimmed = current.trim();
+  if (trimmed) {
+    parts.push(trimmed);
+  }
+  return parts;
+}
+
+// Pair < with the first > after it, not the last > in the mailbox.
+function extractAddrSpec(mailbox: string): string {
+  const open = mailbox.indexOf('<');
+  if (open === -1) {
+    return mailbox.trim();
+  }
+  const close = mailbox.indexOf('>', open + 1);
+  if (close === -1) {
+    return '';
+  }
+  return mailbox.slice(open + 1, close).trim();
+}
+
+export function extractEmailAddresses(header?: string): string[] {
+  if (!header) {
+    return [];
+  }
+  const addresses: string[] = [];
+  for (const mailbox of splitAddressList(header)) {
+    const addr = extractAddrSpec(mailbox);
+    if (validateEmail(addr)) {
+      addresses.push(addr);
+    }
+  }
+  return addresses;
+}
+
+export function buildReplyRecipients(
+  fromHeader: string | undefined,
+  toHeader: string | undefined,
+  replyAll: boolean
+): string[] {
+  const recipients = [
+    ...extractEmailAddresses(fromHeader),
+    ...(replyAll ? extractEmailAddresses(toHeader) : []),
+  ];
+  if (recipients.length === 0) {
+    throw new UserError('Cannot reply: no valid recipient address found in the original message.');
+  }
+  return recipients;
+}
+
 // --- RFC 2047 MIME Encoding for Headers ---
+function assertNoCrlf(value: string): void {
+  if (value.includes('\r') || value.includes('\n')) {
+    throw new UserError('Header values must not contain CR or LF.');
+  }
+}
+
+function assertSafeHeaderFields(options: {
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  inReplyTo?: string;
+}): void {
+  for (const value of options.to) {
+    assertNoCrlf(value);
+  }
+  if (options.cc) {
+    for (const value of options.cc) {
+      assertNoCrlf(value);
+    }
+  }
+  if (options.bcc) {
+    for (const value of options.bcc) {
+      assertNoCrlf(value);
+    }
+  }
+  assertNoCrlf(options.subject);
+  if (options.inReplyTo) {
+    assertNoCrlf(options.inReplyTo);
+  }
+}
+
 export function encodeEmailHeader(text: string): string {
+  assertNoCrlf(text);
   // Check if encoding is needed (non-ASCII characters)
   if (/^[\x00-\x7F]*$/.test(text)) {
     return text; // Pure ASCII, no encoding needed
@@ -102,6 +204,8 @@ export function createSimpleEmail(options: {
 }): string {
   const { to, cc, bcc, subject, body, htmlBody, mimeType = 'text/plain', inReplyTo } = options;
 
+  assertSafeHeaderFields({ to, cc, bcc, subject, inReplyTo });
+
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const headers: string[] = [];
 
@@ -164,6 +268,8 @@ export async function createEmailWithAttachments(options: {
   if (!attachments || attachments.length === 0) {
     return createSimpleEmail(options);
   }
+
+  assertSafeHeaderFields({ to, cc, bcc, subject, inReplyTo });
 
   const boundary = `boundary_${Date.now()}_${Math.random().toString(36).substring(7)}`;
   const altBoundary = `alt_${boundary}`;
@@ -229,6 +335,7 @@ export async function createEmailWithAttachments(options: {
       const lines = base64Content.match(/.{1,76}/g) || [];
       parts.push(lines.join('\r\n'));
     } catch (error: any) {
+      if (error instanceof UserError) throw error;
       throw new UserError(`Failed to read attachment "${filePath}": ${error.message}`);
     }
   }
@@ -335,18 +442,32 @@ function decodeHtmlEntities(str: string): string {
       Object.prototype.hasOwnProperty.call(NAMED_ENTITIES, name) ? NAMED_ENTITIES[name] : m);
 }
 
+function replaceUntilStable(input: string, pattern: RegExp, replacement: string): string {
+  let previous: string;
+  do {
+    previous = input;
+    pattern.lastIndex = 0;
+    input = input.replace(pattern, replacement);
+  } while (input !== previous);
+  return input;
+}
+
 export function htmlToText(html: string): string {
   if (!html) return '';
   let text = html;
+  let previous: string;
 
-  // Drop comments and non-content blocks entirely
-  text = text.replace(/<!--[\s\S]*?-->/g, ' ');
-  text = text.replace(/<(script|style|head|title|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
+  // Drop comments and non-content blocks until nested wrappers stop reappearing
+  do {
+    previous = text;
+    text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+    text = text.replace(/<(script|style|head|title|noscript)\b[\s\S]*?<\/\1>/gi, ' ');
+  } while (text !== previous);
 
   // Preserve hyperlinks as "label (url)" so product/order links survive
   text = text.replace(/<a\b[^>]*?href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
     (_m, href: string, inner: string) => {
-      const label = inner.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const label = replaceUntilStable(inner, /<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
       const url = href.trim();
       if (!/^https?:/i.test(url)) return label;
       if (!label) return url;
@@ -359,11 +480,12 @@ export function htmlToText(html: string): string {
   text = text.replace(/<(?:p|div|tr|li|h[1-6]|blockquote|section|header|footer|article)\b[^>]*>/gi, '\n');
   text = text.replace(/<td\b[^>]*>/gi, ' ');
 
-  // Strip any remaining tags
-  text = text.replace(/<[^>]+>/g, '');
-
-  // Decode entities, then normalize whitespace
+  // Strip remaining tags; repeat after entity decode so &lt;script&gt; cannot reappear as a tag
+  text = replaceUntilStable(text, /<[^>]+>/g, '');
   text = decodeHtmlEntities(text);
+  text = replaceUntilStable(text, /<[^>]+>/g, '');
+
+  // Normalize whitespace
   text = text.replace(/ /g, ' ');
   text = text.replace(/[ \t\f\v]+/g, ' ');
   text = text.replace(/ *\n */g, '\n');
@@ -477,7 +599,7 @@ export async function sendEmail(gmail: Gmail, rawEmail: string, threadId?: strin
     if (error.code === 403) {
       throw new UserError(`Permission denied to send email: ${message}`);
     }
-    throw new Error(`Gmail API Error: ${message}`);
+    throw new UserError(`Gmail API Error: ${message}`);
   }
 }
 
@@ -497,7 +619,7 @@ export async function createDraft(gmail: Gmail, rawEmail: string, threadId?: str
     return response.data;
   } catch (error: any) {
     const message = error.response?.data?.error?.message || error.message;
-    throw new Error(`Gmail API Error creating draft: ${message}`);
+    throw new UserError(`Gmail API Error creating draft: ${message}`);
   }
 }
 
@@ -514,7 +636,7 @@ export async function getMessage(gmail: Gmail, messageId: string, format: 'full'
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -555,7 +677,7 @@ export async function searchMessages(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -572,7 +694,7 @@ export async function getThread(gmail: Gmail, threadId: string, format: 'full' |
     if (error.code === 404) {
       throw new UserError(`Thread not found (ID: ${threadId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -602,7 +724,7 @@ export async function listThreads(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -622,7 +744,7 @@ export async function modifyMessageLabels(gmail: Gmail, messageId: string, addLa
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -666,7 +788,7 @@ export async function deleteMessage(gmail: Gmail, messageId: string): Promise<vo
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -709,7 +831,7 @@ export async function trashMessage(gmail: Gmail, messageId: string): Promise<gma
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -725,16 +847,37 @@ export async function untrashMessage(gmail: Gmail, messageId: string): Promise<g
     if (error.code === 404) {
       throw new UserError(`Message not found (ID: ${messageId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
+export function resolveSafeDownloadPath(saveDir: string, filename: string, overwrite?: boolean): string {
+  const resolvedDir = path.resolve(saveDir);
+  const base = path.basename(filename);
+  if (base === '' || base === '.' || base === '..') {
+    throw new UserError('Download path escapes the requested directory.');
+  }
+  const fullPath = path.resolve(resolvedDir, base);
+  // basename alone is not enough (path.basename('..') === '..'); require a child of resolvedDir.
+  if (!fullPath.startsWith(resolvedDir + path.sep)) {
+    throw new UserError('Download path escapes the requested directory.');
+  }
+  if (overwrite !== true && existsSync(fullPath)) {
+    throw new UserError(`File already exists: ${fullPath}. Pass overwrite: true to replace it.`);
+  }
+  return fullPath;
+}
+
 // --- Download Attachment Helper ---
-export async function downloadAttachment(gmail: Gmail, messageId: string, attachmentId: string, savePath?: string, filename?: string): Promise<{
+export async function downloadAttachment(gmail: Gmail, messageId: string, attachmentId: string, savePath?: string, filename?: string, overwrite?: boolean): Promise<{
   savedTo: string;
   size: number;
 }> {
   try {
+    const saveDir = path.resolve(savePath || process.cwd());
+    const saveFilename = filename || `attachment_${attachmentId.substring(0, 8)}`;
+    const fullPath = resolveSafeDownloadPath(saveDir, saveFilename, overwrite);
+
     // Get the attachment data
     const response = await gmail.users.messages.attachments.get({
       userId: 'me',
@@ -749,15 +892,8 @@ export async function downloadAttachment(gmail: Gmail, messageId: string, attach
     // Decode base64url data
     const data = Buffer.from(response.data.data, 'base64');
 
-    // Determine save path
-    const saveDir = savePath || process.cwd();
-    const saveFilename = filename || `attachment_${attachmentId.substring(0, 8)}`;
-    const fullPath = path.join(saveDir, saveFilename);
-
-    // Ensure directory exists
     await fs.mkdir(saveDir, { recursive: true });
 
-    // Write file
     await fs.writeFile(fullPath, data);
 
     return {
@@ -768,7 +904,7 @@ export async function downloadAttachment(gmail: Gmail, messageId: string, attach
     if (error.code === 404) {
       throw new UserError(`Attachment not found (Message: ${messageId}, Attachment: ${attachmentId}).`);
     }
-    throw error instanceof UserError ? error : new Error(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -780,7 +916,7 @@ export async function getUserProfile(gmail: Gmail): Promise<gmail_v1.Schema$Prof
     });
     return response.data;
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -803,7 +939,7 @@ export async function listDrafts(gmail: Gmail, options: {
       nextPageToken: response.data.nextPageToken || undefined,
     };
   } catch (error: any) {
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -819,7 +955,7 @@ export async function getDraft(gmail: Gmail, draftId: string): Promise<gmail_v1.
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -840,7 +976,7 @@ export async function updateDraft(gmail: Gmail, draftId: string, rawEmail: strin
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -854,7 +990,7 @@ export async function deleteDraft(gmail: Gmail, draftId: string): Promise<void> 
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -871,6 +1007,6 @@ export async function sendDraft(gmail: Gmail, draftId: string): Promise<gmail_v1
     if (error.code === 404) {
       throw new UserError(`Draft not found (ID: ${draftId}).`);
     }
-    throw new Error(`Gmail API Error: ${error.message}`);
+    throw new UserError(`Gmail API Error: ${error.message}`);
   }
 }

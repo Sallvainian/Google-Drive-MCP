@@ -62,7 +62,7 @@ export async function listLabels(gmail: Gmail): Promise<LabelInfo[]> {
 
     return labels;
   } catch (error: any) {
-    throw new Error(`Gmail API Error listing labels: ${error.message}`);
+    throw new UserError(`Gmail API Error listing labels: ${error.message}`);
   }
 }
 
@@ -94,7 +94,7 @@ export async function getLabel(gmail: Gmail, labelId: string): Promise<LabelInfo
     if (error.code === 404) {
       throw new UserError(`Label not found (ID: ${labelId}).`);
     }
-    throw error instanceof UserError ? error : new Error(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -129,7 +129,7 @@ export async function createLabel(gmail: Gmail, options: {
 
     const label = response.data;
     if (!label.id || !label.name) {
-      throw new Error('Invalid label data received from create operation.');
+      throw new UserError('Invalid label data received from create operation.');
     }
 
     return {
@@ -144,7 +144,7 @@ export async function createLabel(gmail: Gmail, options: {
     if (error.code === 409) {
       throw new UserError(`A label named "${options.name}" already exists.`);
     }
-    throw new Error(`Gmail API Error creating label: ${error.message}`);
+    throw new UserError(`Gmail API Error creating label: ${error.message}`);
   }
 }
 
@@ -182,7 +182,7 @@ export async function updateLabel(gmail: Gmail, labelId: string, options: {
 
     const label = response.data;
     if (!label.id || !label.name) {
-      throw new Error('Invalid label data received from update operation.');
+      throw new UserError('Invalid label data received from update operation.');
     }
 
     return {
@@ -197,7 +197,7 @@ export async function updateLabel(gmail: Gmail, labelId: string, options: {
     if (error.code === 404) {
       throw new UserError(`Label not found (ID: ${labelId}).`);
     }
-    throw new Error(`Gmail API Error updating label: ${error.message}`);
+    throw new UserError(`Gmail API Error updating label: ${error.message}`);
   }
 }
 
@@ -219,7 +219,7 @@ export async function deleteLabel(gmail: Gmail, labelId: string): Promise<void> 
     if (error.code === 404) {
       throw new UserError(`Label not found (ID: ${labelId}).`);
     }
-    throw new Error(`Gmail API Error deleting label: ${error.message}`);
+    throw new UserError(`Gmail API Error deleting label: ${error.message}`);
   }
 }
 

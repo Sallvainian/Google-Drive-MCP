@@ -67,7 +67,7 @@ export async function listFilters(gmail: Gmail): Promise<FilterInfo[]> {
 
     return filters;
   } catch (error: any) {
-    throw new Error(`Gmail API Error listing filters: ${error.message}`);
+    throw new UserError(`Gmail API Error listing filters: ${error.message}`);
   }
 }
 
@@ -107,15 +107,22 @@ export async function getFilter(gmail: Gmail, filterId: string): Promise<FilterI
     if (error.code === 404) {
       throw new UserError(`Filter not found (ID: ${filterId}).`);
     }
-    throw error instanceof UserError ? error : new Error(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
 // --- Create Filter ---
 export async function createFilter(gmail: Gmail, criteria: FilterCriteriaArgs, action: FilterActionArgs): Promise<FilterInfo> {
   try {
-    // Validate that at least one criteria is provided
-    const hasCriteria = Object.values(criteria).some(v => v !== undefined);
+    // Positive matcher: from/to/subject/query (non-empty), size (including 0), or hasAttachment === true.
+    // false, '', negatedQuery, excludeChats, and sizeComparison do not count.
+    const hasCriteria =
+      (typeof criteria.from === 'string' && criteria.from !== '') ||
+      (typeof criteria.to === 'string' && criteria.to !== '') ||
+      (typeof criteria.subject === 'string' && criteria.subject !== '') ||
+      (typeof criteria.query === 'string' && criteria.query !== '') ||
+      typeof criteria.size === 'number' ||
+      criteria.hasAttachment === true;
     if (!hasCriteria) {
       throw new UserError('At least one filter criteria must be specified.');
     }
@@ -150,7 +157,7 @@ export async function createFilter(gmail: Gmail, criteria: FilterCriteriaArgs, a
 
     const filter = response.data;
     if (!filter.id) {
-      throw new Error('Invalid filter data received from create operation.');
+      throw new UserError('Invalid filter data received from create operation.');
     }
 
     return {
@@ -177,7 +184,7 @@ export async function createFilter(gmail: Gmail, criteria: FilterCriteriaArgs, a
     if (error.code === 400) {
       throw new UserError(`Invalid filter configuration: ${error.message}`);
     }
-    throw new Error(`Gmail API Error creating filter: ${error.message}`);
+    throw new UserError(`Gmail API Error creating filter: ${error.message}`);
   }
 }
 
@@ -192,7 +199,7 @@ export async function deleteFilter(gmail: Gmail, filterId: string): Promise<void
     if (error.code === 404) {
       throw new UserError(`Filter not found (ID: ${filterId}).`);
     }
-    throw new Error(`Gmail API Error deleting filter: ${error.message}`);
+    throw new UserError(`Gmail API Error deleting filter: ${error.message}`);
   }
 }
 

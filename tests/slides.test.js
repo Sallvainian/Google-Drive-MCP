@@ -9,6 +9,7 @@ import {
   buildCreateShapeRequest,
   buildDeleteObjectRequest,
 } from '../dist/googleSlidesApiHelpers.js';
+import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
 
@@ -250,6 +251,28 @@ describe('Batch Update Execution', () => {
         executeBatchUpdate(mockSlides, 'pres_id', [{ deleteObject: {} }]),
         (error) => {
           return error.message.includes('Permission denied');
+        }
+      );
+    });
+
+    it('should throw UserError for 500 response', async () => {
+      const mockSlides = {
+        presentations: {
+          batchUpdate: mock.fn(async () => {
+            const error = new Error('backend');
+            error.code = 500;
+            throw error;
+          }),
+        },
+      };
+
+      await assert.rejects(
+        executeBatchUpdate(mockSlides, 'pres_id', [{ deleteObject: {} }]),
+        (error) => {
+          assert.ok(error instanceof UserError);
+          assert.ok(error.message.includes('Google Slides API Error (500)'));
+          assert.ok(error.message.includes('backend'));
+          return true;
         }
       );
     });

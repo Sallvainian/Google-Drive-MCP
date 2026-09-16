@@ -2,6 +2,7 @@
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 import { JWT } from 'google-auth-library'; // ADDED: Import for Service Account client
+import { randomBytes } from 'crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as http from 'http';
@@ -88,7 +89,7 @@ async function getAuthenticatedEmail(client: OAuth2Client | JWT): Promise<string
   return data.user?.emailAddress ?? '(unknown)';
 }
 
-function accountMatchesRequired(email: string): boolean {
+export function accountMatchesRequired(email: string): boolean {
   const required = process.env.REQUIRED_ACCOUNT_EMAIL;
   if (!required) return true;
   return email.toLowerCase() === required.toLowerCase();
@@ -99,7 +100,7 @@ async function isClientForRequiredAccount(client: OAuth2Client): Promise<boolean
   const actual = await getAuthenticatedEmail(client);
   if (!accountMatchesRequired(actual)) {
     console.error(
-      `Saved credentials are for "${actual}" but REQUIRED_ACCOUNT_EMAIL="${process.env.REQUIRED_ACCOUNT_EMAIL}". Will re-authenticate.`
+      `Saved credentials are for "${actual}" but do not match REQUIRED_ACCOUNT_EMAIL. Will re-authenticate.`
     );
     return false;
   }
@@ -197,7 +198,7 @@ async function loadClientSecrets() {
   };
 }
 
-async function saveCredentials(client: OAuth2Client): Promise<void> {
+export async function saveCredentials(client: OAuth2Client): Promise<void> {
   const { client_secret, client_id } = await loadClientSecrets();
   const payload = JSON.stringify({
     type: 'authorized_user',
@@ -209,15 +210,113 @@ async function saveCredentials(client: OAuth2Client): Promise<void> {
     token_type: client.credentials.token_type,
     scope: client.credentials.scope,
   });
-  await fs.writeFile(TOKEN_PATH, payload);
+  await fs.writeFile(TOKEN_PATH, payload, { mode: 0o600 });
   console.error('Token stored to', TOKEN_PATH);
 
-  // Hint for env var users
+  // Hint for env var users — point at the field; never interpolate the live refresh token,
+  // and never print an assignment whose value is a placeholder someone could paste verbatim
   if (process.env.GOOGLE_CLIENT_ID) {
     console.error(
-      `To use env vars instead of token.json, set: GOOGLE_REFRESH_TOKEN="${client.credentials.refresh_token}"`
+      `To use env vars instead of token.json, set GOOGLE_REFRESH_TOKEN to the refresh_token field in ${TOKEN_PATH}`
     );
   }
+}
+
+export function listenForOAuthCode(
+  expectedState: string,
+  port: number = 3000
+): { code: Promise<string>; listening: Promise<number>; close: () => void } {
+  let closeFn = () => {};
+  let listeningSettled = false;
+  let resolveListening: (boundPort: number) => void = () => {};
+  let rejectListening: (err: Error) => void = () => {};
+  const listening = new Promise<number>((resolve, reject) => {
+    resolveListening = resolve;
+    rejectListening = reject;
+  });
+
+  const code = new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let timeoutHandle: NodeJS.Timeout;
+    const server = http.createServer((req, res) => {
+      try {
+        const reqUrl = new URL(req.url || '', `http://localhost:${port}`);
+        const receivedCode = reqUrl.searchParams.get('code');
+        const error = reqUrl.searchParams.get('error');
+
+        if (error) {
+          res.writeHead(400, { 'Content-Type': 'text/html' });
+          res.end(`<html><body><h1>Authorization Failed</h1><p>Error: ${error}</p><p>You can close this window.</p></body></html>`);
+          settle('reject', new Error(`Authorization error: ${error}`));
+          return;
+        }
+
+        if (receivedCode) {
+          const receivedState = reqUrl.searchParams.get('state');
+          if (receivedState !== expectedState) {
+            console.error('Rejected OAuth callback: state parameter did not match this flow. Still waiting...');
+            res.writeHead(400, { 'Content-Type': 'text/html' });
+            res.end('<html><body><h1>Invalid OAuth state</h1><p>You can close this window.</p></body></html>');
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end('<html><body><h1>Authorization Successful!</h1><p>You can close this window and return to the terminal.</p></body></html>');
+          settle('resolve', receivedCode);
+          return;
+        }
+
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<html><body><h1>No authorization code received</h1></body></html>');
+      } catch (err) {
+        settle('reject', err as Error);
+      }
+    });
+
+    function settle(kind: 'resolve' | 'reject', value: string | Error) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      server.close();
+      if (kind === 'resolve') {
+        resolve(value as string);
+        return;
+      }
+      const err = value instanceof Error ? value : new Error(String(value));
+      if (!listeningSettled) {
+        listeningSettled = true;
+        rejectListening(err);
+      }
+      reject(err);
+    }
+
+    timeoutHandle = setTimeout(() => {
+      settle('reject', new Error('Authentication timed out after 5 minutes'));
+    }, 5 * 60 * 1000);
+
+    server.listen(port, () => {
+      const address = server.address();
+      const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+      console.error(`Local server listening on port ${boundPort}...`);
+      if (!listeningSettled) {
+        listeningSettled = true;
+        resolveListening(boundPort);
+      }
+    });
+
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        settle('reject', new Error(`Port ${port} is already in use. Please close any application using it and try again.`));
+      } else {
+        settle('reject', err);
+      }
+    });
+
+    closeFn = () => {
+      settle('reject', new Error('OAuth callback listener closed'));
+    };
+  });
+
+  return { code, listening, close: () => closeFn() };
 }
 
 async function authenticate(): Promise<OAuth2Client> {
@@ -238,6 +337,8 @@ async function authenticate(): Promise<OAuth2Client> {
     // Pre-select the required account in Google's picker so the wrong-account pathway is closed off
     authUrlOptions.login_hint = process.env.REQUIRED_ACCOUNT_EMAIL;
   }
+  const state = randomBytes(32).toString('hex');
+  authUrlOptions.state = state;
   const authorizeUrl = oAuth2Client.generateAuthUrl(authUrlOptions);
 
   console.error('\n=== Google OAuth Authentication ===');
@@ -248,63 +349,19 @@ async function authenticate(): Promise<OAuth2Client> {
 
   // For installed apps, start local server to capture the code
   if (client_type !== 'web') {
-    const code = await new Promise<string>((resolve, reject) => {
-      const server = http.createServer(async (req, res) => {
-        try {
-          const reqUrl = new URL(req.url || '', `http://localhost:${PORT}`);
-          const code = reqUrl.searchParams.get('code');
-          const error = reqUrl.searchParams.get('error');
-
-          if (error) {
-            res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end(`<html><body><h1>Authorization Failed</h1><p>Error: ${error}</p><p>You can close this window.</p></body></html>`);
-            server.close();
-            reject(new Error(`Authorization error: ${error}`));
-            return;
+    const waiter = listenForOAuthCode(state, PORT);
+    void waiter.listening.then(() => {
+      import('child_process').then(({ exec }) => {
+        const platform = process.platform;
+        const openCommand = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
+        exec(`${openCommand} "${authorizeUrl}"`, (err) => {
+          if (err) {
+            console.error('Could not open browser automatically. Please open the URL manually.');
           }
-
-          if (code) {
-            res.writeHead(200, { 'Content-Type': 'text/html' });
-            res.end('<html><body><h1>Authorization Successful!</h1><p>You can close this window and return to the terminal.</p></body></html>');
-            server.close();
-            resolve(code);
-          } else {
-            res.writeHead(400, { 'Content-Type': 'text/html' });
-            res.end('<html><body><h1>No authorization code received</h1></body></html>');
-          }
-        } catch (err) {
-          reject(err);
-        }
-      });
-
-      server.listen(PORT, () => {
-        console.error(`Local server listening on port ${PORT}...`);
-        // Try to open browser automatically
-        import('child_process').then(({ exec }) => {
-          const platform = process.platform;
-          const openCommand = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
-          exec(`${openCommand} "${authorizeUrl}"`, (err) => {
-            if (err) {
-              console.error('Could not open browser automatically. Please open the URL manually.');
-            }
-          });
         });
       });
-
-      server.on('error', (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE') {
-          reject(new Error(`Port ${PORT} is already in use. Please close any application using it and try again.`));
-        } else {
-          reject(err);
-        }
-      });
-
-      // Timeout after 5 minutes
-      setTimeout(() => {
-        server.close();
-        reject(new Error('Authentication timed out after 5 minutes'));
-      }, 5 * 60 * 1000);
-    });
+    }, () => {});
+    const code = await waiter.code;
 
     try {
       const { tokens } = await oAuth2Client.getToken(code);
@@ -320,7 +377,7 @@ async function authenticate(): Promise<OAuth2Client> {
       console.error('Authentication successful!');
       return oAuth2Client;
     } catch (err) {
-      console.error('Error retrieving access token', err);
+      console.error('Error retrieving access token');
       throw new Error(`Authentication failed: ${(err as Error).message}`);
     }
   } else {
