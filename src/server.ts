@@ -2750,7 +2750,7 @@ parameters: z.object({
   templateId: z.string().describe('ID of the template document to copy from.'),
   newTitle: z.string().min(1).describe('Title for the new document.'),
   parentFolderId: z.string().optional().describe('ID of folder where document should be created. If not provided, creates in Drive root.'),
-  replacements: z.record(z.string()).nullable().optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
+  replacements: z.record(z.string(), z.string()).nullable().optional().describe('Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).'),
 }),
 execute: async (args, { log }) => {
 const drive = await getDriveClient();
