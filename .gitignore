@@ -25,16 +25,17 @@ export-docs.mjs
 # Local workspace / session files
 .mcp.json
 
-# .claude/ is TRACKED (config, hooks, skills, personalities).
-# Only the disposable/large caches under it are ignored:
+# .claude/ config, hooks, and personalities stay tracked.
+# Skills are a vendor BMAD install. Gitignoring them keeps a BMAD upgrade
+# from dirtying the tree and blocking bmad-loop. Files stay on disk; Grok
+# worktrees get skills from seed_files in .bmad-loop/profiles/grok.toml
+# (.grok/skills), not from this tree. loop-monitoring is a symlink into
+# BMAD-Custom and is covered by the directory ignore below.
+.claude/skills/
 .claude/audio/
 .claude/.agentvibes-backup/
 .claude/**/.DS_Store
 .claude/*.bak-*
-# Symlink into the BMAD-Custom repo, where this skill lives and has its own
-# history. Tracking it would store an absolute path that only resolves on one
-# machine — see .bmad-loop/profiles/grok.toml on why links dangle here.
-.claude/skills/loop-monitoring
 .agents/
 .playwright/
 .playwright-cli/
