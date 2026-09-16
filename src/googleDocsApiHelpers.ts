@@ -8,6 +8,9 @@ type Docs = docs_v1.Docs; // Alias for convenience
 
 // --- Constants ---
 const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
+export const FIND_TEXT_RANGE_FIELDS = 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))';
+export const GET_PARAGRAPH_RANGE_FIELDS = 'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))';
+export const GET_TABLE_CELL_RANGE_FIELDS = 'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex))))))))';
 
 // --- Core Helper to Execute Batch Updates ---
 export async function executeBatchUpdate(docs: Docs, documentId: string, requests: docs_v1.Schema$Request[], writeControl?: docs_v1.Schema$WriteControl): Promise<docs_v1.Schema$BatchUpdateDocumentResponse> {
@@ -93,7 +96,7 @@ try {
     const res = await docs.documents.get({
         documentId,
         // Request more fields to handle various container types (not just paragraphs)
-        fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))',
+        fields: FIND_TEXT_RANGE_FIELDS,
     });
 
     if (!res.data.body?.content) {
@@ -228,7 +231,7 @@ try {
     const res = await docs.documents.get({
         documentId,
         // Request more comprehensive structure information
-        fields: 'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))',
+        fields: GET_PARAGRAPH_RANGE_FIELDS,
     });
 
     if (!res.data.body?.content) {
@@ -445,7 +448,7 @@ export async function getTableCellRange(
         // Fetch document structure with table details
         const res = await docs.documents.get({
             documentId,
-            fields: 'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex))))))))',
+            fields: GET_TABLE_CELL_RANGE_FIELDS,
         });
 
         if (!res.data.body?.content) {
