@@ -1,6 +1,6 @@
 // tests/tools-list-order.test.js
 import {
-  CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+  assertCreateFromTemplateReplacementsSchema,
   listToolsOverHttpStream,
   listToolsOverStdio,
 } from './live-fastmcp-helpers.js';
@@ -169,10 +169,7 @@ function assertLiveToolsList(listed, expectedNames) {
   }
   const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
   assert.notEqual(create, undefined);
-  assert.deepStrictEqual(
-    create.inputSchema.properties.replacements,
-    CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
-  );
+  assertCreateFromTemplateReplacementsSchema(create.inputSchema.properties.replacements);
 }
 
 describe('live FastMCP tools/list', () => {

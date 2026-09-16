@@ -5,7 +5,7 @@ import {
   startConfiguredTransport,
 } from '../dist/mcpTransport.js';
 import {
-  CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
+  assertCreateFromTemplateReplacementsSchema,
   listToolsOverHttpStream,
   listToolsOverStdio,
   runStartServerCatch,
@@ -183,10 +183,7 @@ describe('startConfiguredTransport', () => {
     assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
     const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
     assert.notEqual(create, undefined);
-    assert.deepStrictEqual(
-      create.inputSchema.properties.replacements,
-      CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
-    );
+    assertCreateFromTemplateReplacementsSchema(create.inputSchema.properties.replacements);
     assert.ok(
       listed.stderr.includes(
         `MCP Server running on httpStream transport, port ${listed.port}. Endpoint: /mcp`,
@@ -224,10 +221,7 @@ describe('startConfiguredTransport', () => {
     assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
     const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
     assert.notEqual(create, undefined);
-    assert.deepStrictEqual(
-      create.inputSchema.properties.replacements,
-      CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA,
-    );
+    assertCreateFromTemplateReplacementsSchema(create.inputSchema.properties.replacements);
   });
 
   it('Start failure stdio', async () => {

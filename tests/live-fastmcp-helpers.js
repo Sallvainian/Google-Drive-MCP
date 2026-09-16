@@ -2,6 +2,7 @@
 //
 // Spawn dist/server.js with the CI stub-authorize loader and complete
 // initialize + tools/list over stdio NDJSON or httpStream POST /mcp.
+import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
@@ -15,14 +16,30 @@ const registerPath = join(scriptsDir, 'stub-authorize-register.mjs');
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.CAPTURE_TIMEOUT_MS || 120000);
 
-export const CREATE_FROM_TEMPLATE_REPLACEMENTS_SCHEMA = {
-  anyOf: [
-    { type: 'object', additionalProperties: { type: 'string' } },
-    { type: 'null' },
-  ],
-  description:
-    'Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).',
-};
+export const CREATE_FROM_TEMPLATE_REPLACEMENTS_DESCRIPTION =
+  'Key-value pairs for text replacements in the template (e.g., {"{{NAME}}": "John Doe", "{{DATE}}": "2024-01-01"}).';
+
+// Zod 3 JSON Schema omits propertyNames; Zod 4 / FastMCP nested zod 4 emits
+// propertyNames: { type: 'string' }. Both mean string-to-string.
+export function assertCreateFromTemplateReplacementsSchema(schema) {
+  assert.equal(schema.description, CREATE_FROM_TEMPLATE_REPLACEMENTS_DESCRIPTION);
+  assert.ok(Array.isArray(schema.anyOf));
+  const objectBranch = schema.anyOf.find((branch) => branch.type === 'object');
+  const nullBranch = schema.anyOf.find((branch) => branch.type === 'null');
+  assert.notEqual(objectBranch, undefined);
+  assert.deepStrictEqual(nullBranch, { type: 'null' });
+  assert.deepStrictEqual(objectBranch.additionalProperties, { type: 'string' });
+  assert.equal(objectBranch.type, 'object');
+  if (objectBranch.propertyNames !== undefined) {
+    assert.deepStrictEqual(objectBranch.propertyNames, { type: 'string' });
+  }
+  assert.deepStrictEqual(
+    Object.keys(objectBranch).toSorted(),
+    objectBranch.propertyNames === undefined
+      ? ['additionalProperties', 'type']
+      : ['additionalProperties', 'propertyNames', 'type'],
+  );
+}
 
 export function createStubAuthorizeEnv(overrides = {}) {
   const env = { ...process.env, ...overrides };
