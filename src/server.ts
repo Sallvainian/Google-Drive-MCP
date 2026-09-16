@@ -269,7 +269,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
 
         if (args.format === 'markdown') {
             const markdownContent = GDocsHelpers.convertDocsJsonToMarkdown(args.tabId
-                ? { body: targetTab.documentTab.body, lists: targetTab.documentTab.lists || res.data.lists }
+                ? GDocsHelpers.markdownContentSourceFromDocumentTab(targetTab.documentTab, res.data.lists)
                 : contentSource);
             const totalLength = markdownContent.length;
             log.info(`Generated markdown: ${totalLength} characters`);
@@ -1594,11 +1594,13 @@ try {
   let result = `Found ${files.length} Google Document(s):\n\n`;
   files.forEach((file, index) => {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-    const owner = file.owners?.[0]?.displayName || 'Unknown';
+    const owner = file.owners?.[0]?.displayName;
     result += `${index + 1}. **${file.name}**\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Modified: ${modifiedDate}\n`;
-    result += `   Owner: ${owner}\n`;
+    if (owner) {
+      result += `   Owner: ${owner}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1669,11 +1671,13 @@ try {
   let result = `Found ${files.length} document(s) matching "${args.searchQuery}":\n\n`;
   files.forEach((file, index) => {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-    const owner = file.owners?.[0]?.displayName || 'Unknown';
+    const owner = file.owners?.[0]?.displayName;
     result += `${index + 1}. **${file.name}**\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Modified: ${modifiedDate}\n`;
-    result += `   Owner: ${owner}\n`;
+    if (owner) {
+      result += `   Owner: ${owner}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1730,12 +1734,14 @@ try {
   files.forEach((file, index) => {
     const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleString() : 'Unknown';
     const lastModifier = file.lastModifyingUser?.displayName || 'Unknown';
-    const owner = file.owners?.[0]?.displayName || 'Unknown';
+    const owner = file.owners?.[0]?.displayName;
 
     result += `${index + 1}. **${file.name}**\n`;
     result += `   ID: ${file.id}\n`;
     result += `   Last Modified: ${modifiedDate} by ${lastModifier}\n`;
-    result += `   Owner: ${owner}\n`;
+    if (owner) {
+      result += `   Owner: ${owner}\n`;
+    }
     result += `   Link: ${file.webViewLink}\n\n`;
   });
 
@@ -1915,11 +1921,11 @@ try {
                       file.mimeType === 'application/vnd.google-apps.spreadsheet' ? '📊' :
                       file.mimeType === 'application/vnd.google-apps.presentation' ? '📈' : '📎';
       const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-      const owner = file.owners?.[0]?.displayName || 'Unknown';
+      const owner = file.owners?.[0]?.displayName;
 
       result += `${fileType} ${file.name}\n`;
       result += `   ID: ${file.id}\n`;
-      result += `   Modified: ${modifiedDate} by ${owner}\n`;
+      result += `   Modified: ${modifiedDate}${owner ? ` by ${owner}` : ''}\n`;
       result += `   Link: ${file.webViewLink}\n\n`;
     });
   }
@@ -2056,7 +2062,7 @@ log.info(`Getting folder info: ${args.folderId}`);
 try {
   const response = await drive.files.get({
     fileId: args.folderId,
-    fields: 'id,name,description,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents',
+    fields: 'id,name,description,mimeType,createdTime,modifiedTime,webViewLink,owners(displayName,emailAddress),lastModifyingUser(displayName),shared,parents',
     supportsAllDrives: true,
   });
 
@@ -2526,6 +2532,7 @@ try {
       }
     }
 
+    GmailHelpers.assertDestinationNotSymlink(localFilePath);
     fs.writeFileSync(localFilePath, buffer);
     return `Successfully downloaded "${originalName}" (exported as ${exportConfig.extension})\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
   } else {
@@ -2549,6 +2556,7 @@ try {
     });
 
     const buffer = Buffer.from(response.data as ArrayBuffer);
+    GmailHelpers.assertDestinationNotSymlink(localFilePath);
     fs.writeFileSync(localFilePath, buffer);
 
     return `Successfully downloaded "${originalName}"\nSaved to: ${localFilePath}\nSize: ${buffer.length} bytes`;
@@ -2647,28 +2655,8 @@ execute: async (args, { log }) => {
   const drive = await getDriveClient();
   log.info(`Listing permissions for file ${args.fileId}`);
   try {
-    const response = await drive.permissions.list({
-      fileId: args.fileId,
-      fields: 'permissions(id,type,role,emailAddress,displayName,domain)',
-      supportsAllDrives: true,
-    });
-    const permissions = response.data.permissions || [];
-    if (permissions.length === 0) {
-      return "No permissions found for this file.";
-    }
-    let result = `File has ${permissions.length} permission(s):\n\n`;
-    permissions.forEach((perm, index) => {
-      result += `${index + 1}. **${perm.role}** — `;
-      if (perm.type === 'anyone') {
-        result += 'Anyone with the link';
-      } else if (perm.type === 'domain') {
-        result += `Domain: ${perm.domain}`;
-      } else {
-        result += `${perm.displayName || 'Unknown'} (${perm.emailAddress || 'no email'})`;
-      }
-      result += ` [type: ${perm.type}]\n`;
-    });
-    return result;
+    const permissions = await DriveHelpers.listAllFilePermissions(drive, args.fileId);
+    return DriveHelpers.formatFilePermissions(permissions);
   } catch (error: any) {
     log.error(`Error listing permissions: ${error.message || error}`);
     if (error.code === 404) throw new UserError("File not found. Check the file ID.");
@@ -3177,11 +3165,13 @@ execute: async (args, { log }) => {
     let result = `Found ${files.length} Google Spreadsheet(s):\n\n`;
     files.forEach((file, index) => {
       const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-      const owner = file.owners?.[0]?.displayName || 'Unknown';
+      const owner = file.owners?.[0]?.displayName;
       result += `${index + 1}. **${file.name}**\n`;
       result += `   ID: ${file.id}\n`;
       result += `   Modified: ${modifiedDate}\n`;
-      result += `   Owner: ${owner}\n`;
+      if (owner) {
+        result += `   Owner: ${owner}\n`;
+      }
       result += `   Link: ${file.webViewLink}\n\n`;
     });
 
@@ -3241,31 +3231,12 @@ Example content array:
     log.info(`Creating formatted document "${args.title}" with ${args.content.length} sections`);
 
     try {
-      // Step 1: Create the document
-      const documentMetadata: drive_v3.Schema$File = {
-        name: args.title,
-        mimeType: 'application/vnd.google-apps.document',
-      };
-
-      if (args.parentFolderId) {
-        documentMetadata.parents = [args.parentFolderId];
-      }
-
-      const createResponse = await drive.files.create({
-        requestBody: documentMetadata,
-        fields: 'id,name,webViewLink',
-        supportsAllDrives: true,
+      const document = await GDocsHelpers.createFormattedDocument(drive, docs, {
+        title: args.title,
+        content: args.content,
+        parentFolderId: args.parentFolderId,
       });
-
-      const document = createResponse.data;
-      const documentId = document.id!;
-      log.info(`Document created: ${documentId}`);
-
-      // Step 2: Build and execute batch update requests for all content
-      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, 1);
-      await GDocsHelpers.executeBatchUpdate(docs, documentId, [...textRequests, ...styleRequests]);
-      log.info(`Inserted ${textRequests.length} text sections`);
-      log.info(`Applied ${styleRequests.length} style updates`);
+      log.info(`Document created: ${document.id}`);
 
       return `Successfully created formatted document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}\n\nAdded ${args.content.length} formatted sections.`;
 
@@ -3426,11 +3397,13 @@ server.addTool({
       let result = `Found ${files.length} Google Slides presentation(s):\n\n`;
       files.forEach((file, index) => {
         const modifiedDate = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown';
-        const owner = file.owners?.[0]?.displayName || 'Unknown';
+        const owner = file.owners?.[0]?.displayName;
         result += `${index + 1}. **${file.name}**\n`;
         result += `   ID: ${file.id}\n`;
         result += `   Modified: ${modifiedDate}\n`;
-        result += `   Owner: ${owner}\n`;
+        if (owner) {
+          result += `   Owner: ${owner}\n`;
+        }
         result += `   Link: ${file.webViewLink}\n\n`;
       });
 

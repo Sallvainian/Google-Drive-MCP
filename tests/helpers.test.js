@@ -1,5 +1,5 @@
 // tests/helpers.test.js
-import { findTextRange, getTableCellRange } from '../dist/googleDocsApiHelpers.js';
+import { findTextRange, getTableCellRange, getParagraphRange, FIND_TEXT_RANGE_FIELDS, GET_PARAGRAPH_RANGE_FIELDS, GET_TABLE_CELL_RANGE_FIELDS } from '../dist/googleDocsApiHelpers.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
@@ -46,7 +46,7 @@ describe('Text Range Finding', () => {
         mockDocs.documents.get.mock.calls[0].arguments[0], 
         {
           documentId: 'doc123',
-          fields: 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))'
+          fields: FIND_TEXT_RANGE_FIELDS
         }
       );
     });
@@ -162,6 +162,53 @@ describe('Text Range Finding', () => {
       assert.deepStrictEqual(result, { startIndex: 9, endIndex: 15 });
     });
 
+    it('should find text that lives only in a table cell', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => ({
+            data: {
+              body: {
+                content: [
+                  {
+                    startIndex: 10,
+                    endIndex: 40,
+                    table: {
+                      tableRows: [
+                        {
+                          tableCells: [
+                            {
+                              content: [
+                                {
+                                  paragraph: {
+                                    elements: [
+                                      {
+                                        startIndex: 12,
+                                        endIndex: 24,
+                                        textRun: {
+                                          content: 'cell target\n'
+                                        }
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }))
+        }
+      };
+
+      const result = await findTextRange(mockDocs, 'doc123', 'target', 1);
+      assert.deepStrictEqual(result, { startIndex: 17, endIndex: 23 });
+    });
+
     it('should throw UserError for 500 response', async () => {
       const mockDocs = {
         documents: {
@@ -269,6 +316,11 @@ describe('Table Cell Range Finding', () => {
       assert.strictEqual(result.contentStartIndex, 12);
       assert.strictEqual(result.contentEndIndex, 24); // 25 - 1 to exclude newline
       assert.strictEqual(result.paragraphEndIndex, 25); // Includes newline for paragraph styling
+      assert.strictEqual(mockDocs.documents.get.mock.calls.length, 1);
+      assert.strictEqual(
+        mockDocs.documents.get.mock.calls[0].arguments[0].fields,
+        GET_TABLE_CELL_RANGE_FIELDS
+      );
     });
 
     it('should return paragraphEndIndex > contentStartIndex for empty cells', async () => {
@@ -454,6 +506,38 @@ describe('Table Cell Range Finding', () => {
           assert.ok(error.message.includes('Document not found (ID: doc123)'));
           return true;
         }
+      );
+    });
+  });
+});
+
+describe('Paragraph Range Finding', () => {
+  describe('getParagraphRange', () => {
+    it('should request the locked fields mask', async () => {
+      const mockDocs = {
+        documents: {
+          get: mock.fn(async () => ({
+            data: {
+              body: {
+                content: [
+                  {
+                    startIndex: 1,
+                    endIndex: 25,
+                    paragraph: {}
+                  }
+                ]
+              }
+            }
+          }))
+        }
+      };
+
+      const result = await getParagraphRange(mockDocs, 'doc123', 5);
+      assert.deepStrictEqual(result, { startIndex: 1, endIndex: 25 });
+      assert.strictEqual(mockDocs.documents.get.mock.calls.length, 1);
+      assert.strictEqual(
+        mockDocs.documents.get.mock.calls[0].arguments[0].fields,
+        GET_PARAGRAPH_RANGE_FIELDS
       );
     });
   });

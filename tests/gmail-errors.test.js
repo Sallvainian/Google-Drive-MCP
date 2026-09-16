@@ -1,5 +1,6 @@
 // tests/gmail-errors.test.js
 import { listLabels, createLabel, getLabel } from '../dist/gmailLabelManager.js';
+import { searchMessages } from '../dist/googleGmailApiHelpers.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
@@ -92,5 +93,73 @@ describe('Gmail label error classification', () => {
         }
       );
     });
+  });
+});
+
+describe('searchMessages error passthrough', () => {
+  it('rethrows getMessage 404 UserError without Gmail API Error prefix', async () => {
+    const mockGmail = {
+      users: {
+        messages: {
+          list: mock.fn(async () => ({ data: { messages: [{ id: 'm1' }] } })),
+          get: mock.fn(async () => {
+            throw { code: 404, message: 'Not Found' };
+          }),
+        },
+      },
+    };
+
+    await assert.rejects(
+      async () => await searchMessages(mockGmail, { query: 'subject:test' }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Message not found (ID: m1).');
+        return true;
+      }
+    );
+  });
+
+  it('does not double-prefix a getMessage 500 UserError', async () => {
+    const mockGmail = {
+      users: {
+        messages: {
+          list: mock.fn(async () => ({ data: { messages: [{ id: 'm1' }] } })),
+          get: mock.fn(async () => {
+            throw { code: 500, message: 'backend' };
+          }),
+        },
+      },
+    };
+
+    await assert.rejects(
+      async () => await searchMessages(mockGmail, { query: 'subject:test' }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Gmail API Error: backend');
+        return true;
+      }
+    );
+  });
+
+  it('wraps messages.list 500 as Gmail API Error', async () => {
+    const mockGmail = {
+      users: {
+        messages: {
+          list: mock.fn(async () => {
+            throw { code: 500, message: 'backend' };
+          }),
+          get: mock.fn(async () => ({ data: { id: 'm1' } })),
+        },
+      },
+    };
+
+    await assert.rejects(
+      async () => await searchMessages(mockGmail, { query: 'subject:test' }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'Gmail API Error: backend');
+        return true;
+      }
+    );
   });
 });

@@ -2,7 +2,7 @@
 import { gmail_v1 } from 'googleapis';
 import { UserError } from 'fastmcp';
 import * as fs from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, lstatSync } from 'fs';
 import * as path from 'path';
 
 type Gmail = gmail_v1.Gmail;
@@ -692,7 +692,7 @@ export async function searchMessages(gmail: Gmail, options: {
       resultSizeEstimate: response.data.resultSizeEstimate || undefined,
     };
   } catch (error: any) {
-    throw new UserError(`Gmail API Error: ${error.message}`);
+    throw error instanceof UserError ? error : new UserError(`Gmail API Error: ${error.message}`);
   }
 }
 
@@ -866,6 +866,21 @@ export async function untrashMessage(gmail: Gmail, messageId: string): Promise<g
   }
 }
 
+export function assertDestinationNotSymlink(fullPath: string): void {
+  let stats;
+  try {
+    stats = lstatSync(fullPath);
+  } catch (err: any) {
+    if (err && err.code === 'ENOENT') {
+      return;
+    }
+    throw err;
+  }
+  if (stats.isSymbolicLink()) {
+    throw new UserError(`Refusing to write through a symlink: ${fullPath}`);
+  }
+}
+
 export function resolveSafeDownloadPath(saveDir: string, filename: string, overwrite?: boolean): string {
   const resolvedDir = path.resolve(saveDir);
   const base = path.basename(filename);
@@ -877,6 +892,7 @@ export function resolveSafeDownloadPath(saveDir: string, filename: string, overw
   if (!fullPath.startsWith(resolvedDir + path.sep)) {
     throw new UserError('Download path escapes the requested directory.');
   }
+  assertDestinationNotSymlink(fullPath);
   if (overwrite !== true && existsSync(fullPath)) {
     throw new UserError(`File already exists: ${fullPath}. Pass overwrite: true to replace it.`);
   }
@@ -909,6 +925,7 @@ export async function downloadAttachment(gmail: Gmail, messageId: string, attach
 
     await fs.mkdir(saveDir, { recursive: true });
 
+    assertDestinationNotSymlink(fullPath);
     await fs.writeFile(fullPath, data);
 
     return {

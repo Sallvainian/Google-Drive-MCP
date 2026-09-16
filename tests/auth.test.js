@@ -383,6 +383,79 @@ describe('OAuth callback state and timeout', () => {
       '5-minute auth timer must not remain among the process active resources'
     );
   });
+
+  it('should HTML-escape the untrusted error query in the failure page', async () => {
+    const waiter = listenForOAuthCode('expected-state-html-escape', 0);
+    activeCallback = waiter;
+    const port = await waiter.listening;
+    const payload = '<script>alert(1)</script>&"\'';
+    const codeRejected = waiter.code.then(
+      () => {
+        throw new Error('expected waiter.code to reject');
+      },
+      (err) => err
+    );
+    const res = await httpGet(port, `/?error=${encodeURIComponent(payload)}`);
+    assert.ok(res.status >= 400 && res.status < 500);
+    assert.equal(res.body.includes('<script>'), false);
+    assert.ok(res.body.includes('&lt;script&gt;alert(1)&lt;/script&gt;&amp;&quot;&#39;'));
+    const err = await codeRejected;
+    assert.match(err.message, /Authorization error:/);
+    assert.ok(err.message.includes(payload));
+    activeCallback = null;
+  });
+
+  it('should ignore /favicon.ico even when it carries ?error=', async () => {
+    const expectedState = 'expected-state-favicon';
+    const waiter = listenForOAuthCode(expectedState, 0);
+    activeCallback = waiter;
+    const port = await waiter.listening;
+    const favicon = await httpGet(port, '/favicon.ico?error=access_denied');
+    assert.strictEqual(favicon.status, 404);
+    assert.strictEqual(await isPending(waiter.code), true);
+    const good = await httpGet(port, `/?code=legit-code&state=${encodeURIComponent(expectedState)}`);
+    assert.strictEqual(good.status, 200);
+    assert.strictEqual(await waiter.code, 'legit-code');
+    activeCallback = null;
+  });
+
+  it('should not settle the flow for ?error= on a non-callback path', async () => {
+    const expectedState = 'expected-state-callback-path';
+    const waiter = listenForOAuthCode(expectedState, 0, { callbackPath: '/oauth2callback' });
+    activeCallback = waiter;
+    const port = await waiter.listening;
+    const stray = await httpGet(port, '/?error=access_denied');
+    assert.strictEqual(stray.status, 404);
+    assert.strictEqual(await isPending(waiter.code), true);
+    const favicon = await httpGet(port, '/favicon.ico?error=access_denied');
+    assert.strictEqual(favicon.status, 404);
+    assert.strictEqual(await isPending(waiter.code), true);
+    const good = await httpGet(
+      port,
+      `/oauth2callback?code=legit-code&state=${encodeURIComponent(expectedState)}`
+    );
+    assert.strictEqual(good.status, 200);
+    assert.strictEqual(await waiter.code, 'legit-code');
+    activeCallback = null;
+  });
+
+  it('should bind 127.0.0.1 so ::1 does not receive the callback', async () => {
+    const waiter = listenForOAuthCode('expected-state-loopback-bind', 0);
+    activeCallback = waiter;
+    const port = await waiter.listening;
+    await assert.rejects(
+      () => httpGet(port, '/', '::1', 500),
+      (err) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /ECONNREFUSED|httpGet timeout/);
+        return true;
+      }
+    );
+    const res = await httpGet(port, '/', '127.0.0.1');
+    assert.strictEqual(res.status, 400);
+    assert.ok(res.body.includes('No authorization code received'));
+    assert.strictEqual(await isPending(waiter.code), true);
+  });
 });
 
 describe('authorize() with an existing token.json', () => {

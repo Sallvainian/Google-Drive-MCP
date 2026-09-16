@@ -4,6 +4,12 @@ import {
   resolveHttpStreamBind,
   startConfiguredTransport,
 } from '../dist/mcpTransport.js';
+import {
+  assertCreateFromTemplateReplacementsSchema,
+  listToolsOverHttpStream,
+  listToolsOverStdio,
+  runStartServerCatch,
+} from './live-fastmcp-helpers.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
@@ -55,12 +61,21 @@ describe('resolveHttpStreamBind', () => {
   });
 
   it('Non-loopback with token', () => {
-    const bind = resolveHttpStreamBind({
-      MCP_HOST: '0.0.0.0',
-      MCP_HTTP_TOKEN: 'secret',
-    });
-    assert.strictEqual(bind.host, '0.0.0.0');
-    assert.strictEqual(bind.token, 'secret');
+    assert.throws(
+      () =>
+        resolveHttpStreamBind({
+          MCP_HOST: '0.0.0.0',
+          MCP_HTTP_TOKEN: 'secret',
+        }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
+        return true;
+      },
+    );
   });
 
   it('Non-loopback without token', () => {
@@ -70,7 +85,7 @@ describe('resolveHttpStreamBind', () => {
         assert.ok(error instanceof UserError);
         assert.strictEqual(
           error.message,
-          'MCP_HOST is not loopback; set MCP_HTTP_TOKEN to bind a non-loopback interface.',
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
         );
         return true;
       },
@@ -159,24 +174,21 @@ describe('createBearerAuthenticate', () => {
 });
 
 describe('startConfiguredTransport', () => {
-  it('Start success http', async () => {
-    const { calls, server } = mockStartServer();
-    const logs = [];
-    await startConfiguredTransport(
-      server,
-      { MCP_TRANSPORT: 'httpStream' },
-      (message) => {
-        logs.push(message);
-      },
+  it('Start success http', { timeout: 180000 }, async () => {
+    const listed = await listToolsOverHttpStream();
+    const names = listed.tools.map((tool) => tool.name);
+    assert.strictEqual(names.length, 108);
+    assert.strictEqual(names[0], 'readGoogleDoc');
+    assert.strictEqual(names[names.length - 1], 'send_draft');
+    assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
+    const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
+    assert.notEqual(create, undefined);
+    assertCreateFromTemplateReplacementsSchema(create.inputSchema.properties.replacements);
+    assert.ok(
+      listed.stderr.includes(
+        `MCP Server running on httpStream transport, port ${listed.port}. Endpoint: /mcp`,
+      ),
     );
-    assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual(calls[0], {
-      transportType: 'httpStream',
-      httpStream: { port: 8787, host: '127.0.0.1' },
-    });
-    assert.deepStrictEqual(logs, [
-      'MCP Server running on httpStream transport, port 8787. Endpoint: /mcp',
-    ]);
   });
 
   it('Start failure', async () => {
@@ -200,18 +212,16 @@ describe('startConfiguredTransport', () => {
     assert.deepStrictEqual(logs, []);
   });
 
-  it('Start success stdio', async () => {
-    const { calls, server } = mockStartServer();
-    const logs = [];
-    await startConfiguredTransport(server, {}, (message) => {
-      logs.push(message);
-    });
-    assert.strictEqual(calls.length, 1);
-    assert.deepStrictEqual(calls[0], { transportType: 'stdio' });
-    assert.equal(Object.hasOwn(calls[0], 'httpStream'), false);
-    assert.deepStrictEqual(logs, [
-      'MCP Server running on stdio transport. Awaiting client connection...',
-    ]);
+  it('Start success stdio', { timeout: 180000 }, async () => {
+    const listed = await listToolsOverStdio();
+    const names = listed.tools.map((tool) => tool.name);
+    assert.strictEqual(names.length, 108);
+    assert.strictEqual(names[0], 'readGoogleDoc');
+    assert.strictEqual(names[names.length - 1], 'send_draft');
+    assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
+    const create = listed.tools.find((tool) => tool.name === 'createFromTemplate');
+    assert.notEqual(create, undefined);
+    assertCreateFromTemplateReplacementsSchema(create.inputSchema.properties.replacements);
   });
 
   it('Start failure stdio', async () => {
@@ -263,19 +273,29 @@ describe('startConfiguredTransport', () => {
     assert.strictEqual(calls[0].httpStream.host, 'localhost');
   });
 
-  it('httpStream non-loopback with token reaches start', async () => {
+  it('httpStream non-loopback with token does not start', async () => {
     const { calls, server } = mockStartServer();
-    await startConfiguredTransport(
-      server,
-      {
-        MCP_TRANSPORT: 'httpStream',
-        MCP_HOST: '0.0.0.0',
-        MCP_HTTP_TOKEN: 'secret',
+    await assert.rejects(
+      () =>
+        startConfiguredTransport(
+          server,
+          {
+            MCP_TRANSPORT: 'httpStream',
+            MCP_HOST: '0.0.0.0',
+            MCP_HTTP_TOKEN: 'secret',
+          },
+          () => {},
+        ),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
+        assert.strictEqual(calls.length, 0);
+        return true;
       },
-      () => {},
     );
-    assert.strictEqual(calls.length, 1);
-    assert.strictEqual(calls[0].httpStream.host, '0.0.0.0');
   });
 
   it('httpStream non-loopback without token does not start', async () => {
@@ -289,6 +309,10 @@ describe('startConfiguredTransport', () => {
         ),
       (error) => {
         assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'MCP_HOST must be a loopback address (127.0.0.1, ::1, or localhost).',
+        );
         assert.strictEqual(calls.length, 0);
         return true;
       },
@@ -333,6 +357,19 @@ describe('server.ts process handlers', () => {
     assert.match(
       source,
       /\.\.\.\(process\.env\.MCP_HTTP_TOKEN\s*\?\s*\{\s*authenticate:\s*McpTransport\.createBearerAuthenticate\(process\.env\.MCP_HTTP_TOKEN\)\s*\}\s*:\s*\{\}\)/,
+    );
+  });
+
+  it('startServer catch exits 1 with FATAL on invalid MCP_PORT', { timeout: 180000 }, async () => {
+    const result = await runStartServerCatch();
+    assert.strictEqual(result.code, 1);
+    assert.ok(
+      result.stderr.includes('FATAL: Server failed to start:'),
+      result.stderr,
+    );
+    assert.ok(
+      result.stderr.includes('MCP_PORT must be an integer between 1 and 65535.'),
+      result.stderr,
     );
   });
 });
