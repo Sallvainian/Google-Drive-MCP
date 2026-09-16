@@ -166,8 +166,8 @@ const exportCalls = fileCalls.filter((c) => c.method === 'export');
 const flaggedFileCalls = fileCalls.filter((c) => c.method !== 'export');
 
 describe('shared-drive flags', () => {
-  it('keeps 31 drive.files.* calls and 5 drive.permissions.* calls', () => {
-    assert.strictEqual(fileCalls.length, 31);
+  it('keeps 32 drive.files.* calls and 5 drive.permissions.* calls', () => {
+    assert.strictEqual(fileCalls.length, 32);
     assert.strictEqual(permissionCalls.length, 5);
     const permissionMethods = permissionCalls.map((c) => c.method).sort();
     assert.deepStrictEqual(permissionMethods, ['create', 'create', 'create', 'delete', 'list'].sort());
@@ -194,7 +194,7 @@ describe('shared-drive flags', () => {
   });
 
   it('puts supportsAllDrives on every files.* params object except files.export', () => {
-    assert.strictEqual(flaggedFileCalls.length, 30);
+    assert.strictEqual(flaggedFileCalls.length, 31);
     for (const call of flaggedFileCalls) {
       assert.equal(
         objectHasKey(call.paramsText, 'supportsAllDrives'),

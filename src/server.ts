@@ -269,7 +269,7 @@ log.info(`Reading Google Doc: ${args.documentId}, Format: ${args.format}${args.t
 
         if (args.format === 'markdown') {
             const markdownContent = GDocsHelpers.convertDocsJsonToMarkdown(args.tabId
-                ? { body: targetTab.documentTab.body, lists: targetTab.documentTab.lists || res.data.lists }
+                ? GDocsHelpers.markdownContentSourceFromDocumentTab(targetTab.documentTab, res.data.lists)
                 : contentSource);
             const totalLength = markdownContent.length;
             log.info(`Generated markdown: ${totalLength} characters`);
@@ -3231,31 +3231,12 @@ Example content array:
     log.info(`Creating formatted document "${args.title}" with ${args.content.length} sections`);
 
     try {
-      // Step 1: Create the document
-      const documentMetadata: drive_v3.Schema$File = {
-        name: args.title,
-        mimeType: 'application/vnd.google-apps.document',
-      };
-
-      if (args.parentFolderId) {
-        documentMetadata.parents = [args.parentFolderId];
-      }
-
-      const createResponse = await drive.files.create({
-        requestBody: documentMetadata,
-        fields: 'id,name,webViewLink',
-        supportsAllDrives: true,
+      const document = await GDocsHelpers.createFormattedDocument(drive, docs, {
+        title: args.title,
+        content: args.content,
+        parentFolderId: args.parentFolderId,
       });
-
-      const document = createResponse.data;
-      const documentId = document.id!;
-      log.info(`Document created: ${documentId}`);
-
-      // Step 2: Build and execute batch update requests for all content
-      const { textRequests, styleRequests } = GDocsHelpers.buildFormattedContentRequests(args.content, 1);
-      await GDocsHelpers.executeBatchUpdate(docs, documentId, [...textRequests, ...styleRequests]);
-      log.info(`Inserted ${textRequests.length} text sections`);
-      log.info(`Applied ${styleRequests.length} style updates`);
+      log.info(`Document created: ${document.id}`);
 
       return `Successfully created formatted document "${document.name}" (ID: ${document.id})\nView Link: ${document.webViewLink}\n\nAdded ${args.content.length} formatted sections.`;
 

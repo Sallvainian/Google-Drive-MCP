@@ -1,6 +1,8 @@
 // tests/docs-destructive-writes.test.js
 import {
   buildFormattedContentRequests,
+  createFormattedDocument,
+  executeBatchUpdate,
   replaceFormattedDocumentContent,
   updateFormattedDocumentSection,
 } from '../dist/googleDocsApiHelpers.js';
@@ -133,6 +135,60 @@ describe('replaceFormattedDocumentContent', () => {
       }
     );
     assert.strictEqual(docs.documents.get.mock.calls.length, 0);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
+  });
+
+  it('throws UserError for empty-text items without get or batchUpdate', async () => {
+    const docs = makeReplaceDocs();
+
+    await assert.rejects(
+      () => replaceFormattedDocumentContent(docs, 'doc123', [{ type: 'normal', text: '' }]),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(error.message, 'content must not be empty.');
+        return true;
+      }
+    );
+    assert.strictEqual(docs.documents.get.mock.calls.length, 0);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
+  });
+
+  it('skips deleteContentRange when endIndex is 2', async () => {
+    const docs = makeReplaceDocs({ endIndex: 2 });
+    const sections = [{ type: 'normal', text: 'Hello' }];
+
+    await replaceFormattedDocumentContent(docs, 'doc123', sections);
+
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 1);
+    const requests = docs.documents.batchUpdate.mock.calls[0].arguments[0].requestBody.requests;
+    assert.equal(requests.some((request) => request.deleteContentRange), false);
+    assert.ok(requests[0].insertText);
+    assert.ok(requests[0].insertText.text.startsWith('Hello'));
+    assert.strictEqual(requests[0].insertText.location.index, 1);
+  });
+
+  it('throws UserError when lastElement.endIndex is missing and does not write', async () => {
+    const docs = {
+      documents: {
+        get: mock.fn(async () => ({
+          data: { revisionId: 'rev1', body: { content: [{}] } },
+        })),
+        batchUpdate: mock.fn(async () => ({ data: {} })),
+      },
+    };
+
+    await assert.rejects(
+      () => replaceFormattedDocumentContent(docs, 'doc123', [{ type: 'normal', text: 'Hello' }]),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'Document endIndex was not returned; cannot replace content safely.'
+        );
+        return true;
+      }
+    );
+    assert.strictEqual(docs.documents.get.mock.calls.length, 1);
     assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
   });
 
@@ -283,6 +339,24 @@ describe('updateFormattedDocumentSection', () => {
     assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
   });
 
+  it('throws UserError when the heading is not found and does not write', async () => {
+    const docs = makeSectionDocs();
+
+    await assert.rejects(
+      () => updateFormattedDocumentSection(docs, 'doc123', 'Missing Heading', [{ type: 'normal', text: 'Hello' }]),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'Could not find a heading matching "Missing Heading" in the document. Make sure the heading text is an exact match.'
+        );
+        return true;
+      }
+    );
+    assert.strictEqual(docs.documents.get.mock.calls.length, 1);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
+  });
+
   it('throws UserError when revisionId is missing and does not write', async () => {
     const docs = makeSectionDocs({ includeRevisionId: false });
 
@@ -320,11 +394,202 @@ describe('formatted-content tool wiring in server.ts', () => {
     }
     assert.ok(toolBody(source, 'replaceDocumentContent').includes('replaceFormattedDocumentContent'));
     assert.ok(toolBody(source, 'updateDocumentSection').includes('updateFormattedDocumentSection'));
-    assert.ok(toolBody(source, 'createFormattedDocument').includes('[...textRequests, ...styleRequests]'));
+    assert.ok(toolBody(source, 'createFormattedDocument').includes('GDocsHelpers.createFormattedDocument'));
     assert.ok(toolBody(source, 'insertFormattedContent').includes('[...textRequests, ...styleRequests]'));
-    assert.ok(toolBody(source, 'createFormattedDocument').includes('executeBatchUpdate'));
     assert.ok(toolBody(source, 'insertFormattedContent').includes('executeBatchUpdate'));
     assert.ok(toolBody(source, 'createDocument').includes('docs.documents.batchUpdate'));
     assert.ok(toolBody(source, 'createFromTemplate').includes('docs.documents.batchUpdate'));
+  });
+});
+
+describe('buildFormattedContentRequests color', () => {
+  it('expands #F00 through hexToRgbColor', () => {
+    const { styleRequests } = buildFormattedContentRequests(
+      [{ type: 'normal', text: 'Hi', color: '#F00' }],
+      1
+    );
+    const style = styleRequests.find((request) => request.updateTextStyle);
+    assert.ok(style);
+    assert.deepStrictEqual(
+      style.updateTextStyle.textStyle.foregroundColor.color.rgbColor,
+      { red: 1, green: 0, blue: 0 }
+    );
+    assert.ok(style.updateTextStyle.fields.includes('foregroundColor'));
+  });
+
+  it('omits foregroundColor when color is invalid so a style request cannot 400', () => {
+    const { styleRequests } = buildFormattedContentRequests(
+      [{ type: 'normal', text: 'Hi', color: '#XYZ', bold: true }],
+      1
+    );
+    const style = styleRequests.find((request) => request.updateTextStyle);
+    assert.ok(style);
+    assert.strictEqual(style.updateTextStyle.textStyle.bold, true);
+    assert.equal('foregroundColor' in style.updateTextStyle.textStyle, false);
+    assert.equal(style.updateTextStyle.fields.includes('foregroundColor'), false);
+  });
+
+  it('does not emit updateTextStyle when the only style is an invalid or null color', () => {
+    const invalid = buildFormattedContentRequests(
+      [{ type: 'normal', text: 'Hi', color: 'not-a-color' }],
+      1
+    );
+    const nulled = buildFormattedContentRequests(
+      [{ type: 'normal', text: 'Hi', color: null }],
+      1
+    );
+    assert.equal(invalid.styleRequests.some((request) => request.updateTextStyle), false);
+    assert.equal(nulled.styleRequests.some((request) => request.updateTextStyle), false);
+  });
+});
+
+describe('executeBatchUpdate insert-only split', () => {
+  it('names leftover content when a later insert-only chunk fails', async () => {
+    let callCount = 0;
+    const docs = {
+      documents: {
+        batchUpdate: mock.fn(async () => {
+          callCount += 1;
+          if (callCount === 1) {
+            return { data: { writeControl: { requiredRevisionId: 'rev2' } } };
+          }
+          const error = new Error('backend');
+          error.code = 500;
+          throw error;
+        }),
+      },
+    };
+    const requests = Array.from({ length: 51 }, (_, i) => ({
+      insertText: { location: { index: 1 }, text: `s${i}` },
+    }));
+
+    await assert.rejects(
+      () => executeBatchUpdate(docs, 'doc123', requests),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.ok(error.message.includes('Partial write'));
+        assert.ok(error.message.includes('leftover'));
+        assert.equal(
+          error.message.includes('Original content was already deleted and was not restored.'),
+          false
+        );
+        return true;
+      }
+    );
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 2);
+  });
+});
+
+describe('createFormattedDocument', () => {
+  function makeDriveAndDocs({ batchUpdate, deleteImpl } = {}) {
+    const drive = {
+      files: {
+        create: mock.fn(async () => ({
+          data: { id: 'doc1', name: 'T', webViewLink: 'http://x' },
+        })),
+        delete: mock.fn(deleteImpl ?? (async () => ({}))),
+      },
+    };
+    const docs = {
+      documents: {
+        batchUpdate: mock.fn(batchUpdate ?? (async () => ({ data: {} }))),
+      },
+    };
+    return { drive, docs };
+  }
+
+  it('deletes the Drive file when batchUpdate fails after create', async () => {
+    const { drive, docs } = makeDriveAndDocs({
+      batchUpdate: async () => {
+        const error = new Error('backend');
+        error.code = 500;
+        throw error;
+      },
+    });
+
+    await assert.rejects(
+      () => createFormattedDocument(drive, docs, {
+        title: 'T',
+        content: [{ type: 'normal', text: 'Hi' }],
+      }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.equal(error.message.includes('Leftover empty document was not deleted'), false);
+        return true;
+      }
+    );
+    assert.strictEqual(drive.files.create.mock.calls.length, 1);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 1);
+    assert.strictEqual(drive.files.delete.mock.calls.length, 1);
+    assert.deepStrictEqual(drive.files.delete.mock.calls[0].arguments[0], {
+      fileId: 'doc1',
+      supportsAllDrives: true,
+    });
+  });
+
+  it('includes leftover id when delete after failed batch also fails', async () => {
+    const { drive, docs } = makeDriveAndDocs({
+      batchUpdate: async () => {
+        const error = new Error('backend');
+        error.code = 500;
+        throw error;
+      },
+      deleteImpl: async () => {
+        throw new Error('delete failed');
+      },
+    });
+
+    await assert.rejects(
+      () => createFormattedDocument(drive, docs, {
+        title: 'T',
+        content: [{ type: 'normal', text: 'Hi' }],
+      }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.ok(error.message.includes('Leftover empty document was not deleted (ID: doc1).'));
+        return true;
+      }
+    );
+    assert.strictEqual(drive.files.delete.mock.calls.length, 1);
+  });
+
+  it('does not delete when files.create fails', async () => {
+    const drive = {
+      files: {
+        create: mock.fn(async () => {
+          const error = new Error('not found');
+          error.code = 404;
+          throw error;
+        }),
+        delete: mock.fn(async () => ({})),
+      },
+    };
+    const docs = {
+      documents: {
+        batchUpdate: mock.fn(async () => ({ data: {} })),
+      },
+    };
+
+    await assert.rejects(
+      () => createFormattedDocument(drive, docs, {
+        title: 'T',
+        content: [{ type: 'normal', text: 'Hi' }],
+      })
+    );
+    assert.strictEqual(drive.files.delete.mock.calls.length, 0);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 0);
+  });
+
+  it('does not delete after a successful batch', async () => {
+    const { drive, docs } = makeDriveAndDocs();
+
+    const document = await createFormattedDocument(drive, docs, {
+      title: 'T',
+      content: [{ type: 'normal', text: 'Hi' }],
+    });
+
+    assert.strictEqual(document.id, 'doc1');
+    assert.strictEqual(drive.files.delete.mock.calls.length, 0);
+    assert.strictEqual(docs.documents.batchUpdate.mock.calls.length, 1);
   });
 });

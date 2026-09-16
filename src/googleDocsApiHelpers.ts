@@ -44,9 +44,12 @@ export async function executeBatchUpdate(docs: Docs, documentId: string, request
           currentWriteControl = { requiredRevisionId: response.writeControl.requiredRevisionId };
         }
       } catch (error: unknown) {
+        const original = error instanceof Error ? error.message : String(error);
         if (deleteCommitted) {
-          const original = error instanceof Error ? error.message : String(error);
           throw new UserError(`${original} Original content was already deleted and was not restored.`);
+        }
+        if (i > 0) {
+          throw new UserError(`${original} Partial write: earlier batches were committed and leftover content was not undone.`);
         }
         throw error;
       }
@@ -1047,6 +1050,20 @@ const ORDERED_GLYPH_TYPES = new Set([
 ]);
 
 /**
+ * Assembles the convertDocsJsonToMarkdown input for a document tab, falling
+ * back to the parent document lists map when the tab omits one.
+ */
+export function markdownContentSourceFromDocumentTab(
+    documentTab: docs_v1.Schema$DocumentTab,
+    documentLists?: docs_v1.Schema$Document['lists']
+): { body?: docs_v1.Schema$Body | null; lists?: docs_v1.Schema$Document['lists'] } {
+    return {
+        body: documentTab.body,
+        lists: documentTab.lists || documentLists,
+    };
+}
+
+/**
  * Converts Google Docs JSON structure to Markdown format
  */
 export function convertDocsJsonToMarkdown(docData: any): string {
@@ -1056,15 +1073,21 @@ export function convertDocsJsonToMarkdown(docData: any): string {
         return 'Document appears to be empty.';
     }
 
-    docData.body.content.forEach((element: any) => {
+    const content = docData.body.content;
+    for (let i = 0; i < content.length; i++) {
+        const element = content[i];
         if (element.paragraph) {
             markdown += convertParagraphToMarkdown(element.paragraph, docData.lists);
+            // A following non-list paragraph must not lazy-continue into this item.
+            if (element.paragraph.bullet && !content[i + 1]?.paragraph?.bullet && !markdown.endsWith('\n\n')) {
+                markdown += '\n';
+            }
         } else if (element.table) {
             markdown += convertTableToMarkdown(element.table);
         } else if (element.sectionBreak) {
             markdown += '\n---\n\n'; // Section break as horizontal rule
         }
-    });
+    }
 
     return markdown.trimEnd();
 }
@@ -1106,16 +1129,17 @@ function convertParagraphToMarkdown(paragraph: any, lists?: any): string {
         });
     }
 
-    // Format based on style
-    if (isHeading && text.trim()) {
-        const hashes = '#'.repeat(Math.min(headingLevel, 6));
-        return `${hashes} ${text.trim()}\n\n`;
-    } else if (isList && text.trim()) {
+    // Format based on style. List markers win over heading namedStyleType so a
+    // DECIMAL item styled HEADING_1 stays `1. text`, not `# text`.
+    if (isList) {
         const nestingLevel = paragraph.bullet.nestingLevel ?? 0;
         const indent = '  '.repeat(nestingLevel);
         const glyphType = lists?.[paragraph.bullet.listId]?.listProperties?.nestingLevels?.[nestingLevel]?.glyphType;
         const marker = ORDERED_GLYPH_TYPES.has(glyphType) ? '1.' : '-';
         return `${indent}${marker} ${text.trim()}\n`;
+    } else if (isHeading && text.trim()) {
+        const hashes = '#'.repeat(Math.min(headingLevel, 6));
+        return `${hashes} ${text.trim()}\n\n`;
     } else if (text.trim()) {
         return `${text.trim()}\n\n`;
     }
@@ -1325,10 +1349,17 @@ export type FormattedSection = {
   color?: string;
 };
 
+function assertFormattedContentNotEmpty(content: FormattedSection[]): void {
+  if (!content || content.length === 0 || content.some((section) => !section.text)) {
+    throw new UserError('content must not be empty.');
+  }
+}
+
 export function buildFormattedContentRequests(
   sections: FormattedSection[],
   startingIndex: number
 ): { textRequests: docs_v1.Schema$Request[], styleRequests: docs_v1.Schema$Request[], finalIndex: number } {
+  assertFormattedContentNotEmpty(sections);
   const textRequests: docs_v1.Schema$Request[] = [];
   const styleRequests: docs_v1.Schema$Request[] = [];
   let currentIndex = startingIndex;
@@ -1396,12 +1427,11 @@ export function buildFormattedContentRequests(
     if (section.bold) { textStyle.bold = true; textStyleFields.push('bold'); }
     if (section.italic) { textStyle.italic = true; textStyleFields.push('italic'); }
     if (section.color) {
-      const hex = section.color.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16) / 255;
-      const g = parseInt(hex.substring(2, 4), 16) / 255;
-      const b = parseInt(hex.substring(4, 6), 16) / 255;
-      textStyle.foregroundColor = { color: { rgbColor: { red: r, green: g, blue: b } } };
-      textStyleFields.push('foregroundColor');
+      const rgbColor = hexToRgbColor(section.color);
+      if (rgbColor) {
+        textStyle.foregroundColor = { color: { rgbColor } };
+        textStyleFields.push('foregroundColor');
+      }
     }
 
     if (textStyleFields.length > 0) {
@@ -1418,12 +1448,6 @@ export function buildFormattedContentRequests(
   }
 
   return { textRequests, styleRequests, finalIndex: currentIndex };
-}
-
-function assertFormattedContentNotEmpty(content: FormattedSection[]): void {
-  if (!content || content.length === 0) {
-    throw new UserError('content must not be empty.');
-  }
 }
 
 function requireRevisionId(revisionId: string | null | undefined): string {
@@ -1447,13 +1471,11 @@ export async function replaceFormattedDocumentContent(
 
   const revisionId = requireRevisionId(docResponse.data.revisionId);
 
-  let endIndex = 1;
-  if (docResponse.data.body?.content) {
-    const lastElement = docResponse.data.body.content[docResponse.data.body.content.length - 1];
-    if (lastElement?.endIndex) {
-      endIndex = lastElement.endIndex;
-    }
+  const lastElement = docResponse.data.body?.content?.[docResponse.data.body.content.length - 1];
+  if (lastElement?.endIndex == null) {
+    throw new UserError('Document endIndex was not returned; cannot replace content safely.');
   }
+  const endIndex = lastElement.endIndex;
 
   const requests: docs_v1.Schema$Request[] = [];
   if (endIndex > 2) {
@@ -1501,4 +1523,50 @@ export async function updateFormattedDocumentSection(
   requests.push(...textRequests, ...styleRequests);
 
   return executeBatchUpdate(docs, documentId, requests, { requiredRevisionId: revisionId });
+}
+
+export async function createFormattedDocument(
+  drive: any,
+  docs: Docs,
+  args: { title: string; content: FormattedSection[]; parentFolderId?: string }
+): Promise<{ id?: string | null; name?: string | null; webViewLink?: string | null }> {
+  assertFormattedContentNotEmpty(args.content);
+  const { textRequests, styleRequests } = buildFormattedContentRequests(args.content, 1);
+
+  const documentMetadata: any = {
+    name: args.title,
+    mimeType: 'application/vnd.google-apps.document',
+  };
+  if (args.parentFolderId) {
+    documentMetadata.parents = [args.parentFolderId];
+  }
+
+  const createResponse = await drive.files.create({
+    requestBody: documentMetadata,
+    fields: 'id,name,webViewLink',
+    supportsAllDrives: true,
+  });
+
+  const document = createResponse.data;
+  const documentId = document.id;
+  if (!documentId) {
+    throw new UserError('Failed to create formatted document - no file ID returned.');
+  }
+
+  try {
+    await executeBatchUpdate(docs, documentId, [...textRequests, ...styleRequests]);
+  } catch (error: unknown) {
+    try {
+      await drive.files.delete({
+        fileId: documentId,
+        supportsAllDrives: true,
+      });
+    } catch {
+      const original = error instanceof Error ? error.message : String(error);
+      throw new UserError(`${original} Leftover empty document was not deleted (ID: ${documentId}).`);
+    }
+    throw error;
+  }
+
+  return document;
 }
