@@ -11,6 +11,8 @@ const MAX_BATCH_UPDATE_REQUESTS = 50; // Google API limits batch size
 export const FIND_TEXT_RANGE_FIELDS = 'body(content(paragraph(elements(startIndex,endIndex,textRun(content))),table,sectionBreak,tableOfContents,startIndex,endIndex))';
 export const GET_PARAGRAPH_RANGE_FIELDS = 'body(content(startIndex,endIndex,paragraph,table,sectionBreak,tableOfContents))';
 export const GET_TABLE_CELL_RANGE_FIELDS = 'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex))))))))';
+// Body-only (no tabs wrap). findElements sets SUGGESTIONS_VIEW_MODE on this get.
+export const FIND_ELEMENT_FIELDS = 'body(content(startIndex,endIndex,table(rows,columns,tableRows(tableCells(content(paragraph(elements(startIndex,endIndex,textRun(content))))))),paragraph(elements(startIndex,endIndex,textRun(content)))))';
 
 export const SUGGESTIONS_VIEW_MODE = 'PREVIEW_WITHOUT_SUGGESTIONS' as const;
 export const TAB_ID_PROPERTIES = 'tabProperties(tabId)';
@@ -261,6 +263,143 @@ try {
     if (error.code === 403) throw new UserError(`Permission denied while searching text in doc ${documentId}.`);
     throw new UserError(`Failed to retrieve doc for text searching: ${error.message || 'Unknown error'}`);
 }
+}
+
+// --- Element Finder ---
+// textQuery: every non-overlapping occurrence's document index range (first tab / body only).
+// elementType paragraph|table: top-level structural listing with a short preview.
+export interface FoundElement {
+    type: 'text' | 'paragraph' | 'table';
+    startIndex: number;
+    endIndex: number;
+    instance?: number; // 1-based occurrence number, for text matches
+    text?: string;     // matched text or a preview of the element
+}
+
+export async function findElements(
+    docs: Docs,
+    documentId: string,
+    options: { textQuery?: string; elementType?: 'paragraph' | 'table' | 'list' | 'image' }
+): Promise<FoundElement[]> {
+    const { textQuery, elementType } = options;
+    if (!textQuery && !elementType) {
+        throw new UserError('findElement requires at least one of "textQuery" or "elementType".');
+    }
+
+    let res;
+    try {
+        res = await docs.documents.get({
+            documentId,
+            fields: FIND_ELEMENT_FIELDS,
+            suggestionsViewMode: SUGGESTIONS_VIEW_MODE,
+        });
+    } catch (error: any) {
+        if (error.code === 404) throw new UserError(`Document not found (ID: ${documentId}).`);
+        if (error.code === 403) throw new UserError(`Permission denied for document ${documentId}.`);
+        throw new Error(`Failed to retrieve document for findElement: ${error.message || 'Unknown error'}`);
+    }
+
+    const content = res.data.body?.content;
+    if (!content) return [];
+
+    const results: FoundElement[] = [];
+
+    // --- Structural listing (paragraph / table) ---
+    if (elementType === 'paragraph' || elementType === 'table') {
+        for (const element of content) {
+            if (elementType === 'paragraph' && element.paragraph?.elements) {
+                const text = element.paragraph.elements
+                    .map((pe: any) => pe.textRun?.content || '')
+                    .join('');
+                if (element.startIndex == null || element.endIndex == null) continue;
+                results.push({
+                    type: 'paragraph',
+                    startIndex: element.startIndex,
+                    endIndex: element.endIndex,
+                    text: text.replace(/\n$/, '').slice(0, 120),
+                });
+            } else if (elementType === 'table' && element.table) {
+                if (element.startIndex == null || element.endIndex == null) continue;
+                results.push({
+                    type: 'table',
+                    startIndex: element.startIndex,
+                    endIndex: element.endIndex,
+                    text: `table ${element.table.rows ?? '?'}x${element.table.columns ?? '?'}`,
+                });
+            }
+        }
+        if (!textQuery) return results;
+    } else if (elementType === 'list' || elementType === 'image') {
+        // Reject even when textQuery is set so matches are not mislabeled as list/image.
+        throw new UserError(`elementType "${elementType}" is not supported. Omit elementType and pass textQuery to locate content by text.`);
+    }
+
+    // Each paragraph (top-level or in a table cell) is one searchable unit. Concatenate
+    // only contiguous text runs (startIndex === lastMappedIndex + 1) and map each
+    // character back to its document index. A unit ends at a missing textRun.content
+    // or an index gap, so a match cannot span an inline object. Paragraphs/cells are
+    // hard boundaries. Nested tables are not searched (mask only populates top-level table).
+    if (textQuery) {
+        interface ParaUnit { text: string; map: number[]; firstIndex: number; }
+        const units: ParaUnit[] = [];
+        const collect = (items: any[]) => {
+            items.forEach(element => {
+                if (element.paragraph?.elements) {
+                    let text = '';
+                    let map: number[] = [];
+                    const flush = () => {
+                        if (map.length > 0) units.push({ text, map, firstIndex: map[0] });
+                        text = '';
+                        map = [];
+                    };
+                    element.paragraph.elements.forEach((pe: any) => {
+                        const runContent = pe.textRun?.content;
+                        if (runContent && pe.startIndex != null) {
+                            if (map.length > 0 && pe.startIndex !== map[map.length - 1] + 1) {
+                                flush();
+                            }
+                            for (let i = 0; i < runContent.length; i++) {
+                                text += runContent[i];
+                                map.push(pe.startIndex + i);
+                            }
+                        } else {
+                            flush();
+                        }
+                    });
+                    flush();
+                }
+                if (element.table?.tableRows) {
+                    element.table.tableRows.forEach((row: any) => {
+                        row.tableCells?.forEach((cell: any) => {
+                            if (cell.content) collect(cell.content);
+                        });
+                    });
+                }
+            });
+        };
+        collect(content);
+        units.sort((a, b) => a.firstIndex - b.firstIndex);
+
+        let instance = 0;
+        for (const unit of units) {
+            let from = 0;
+            while (true) {
+                const at = unit.text.indexOf(textQuery, from);
+                if (at === -1) break;
+                instance++;
+                results.push({
+                    type: 'text',
+                    instance,
+                    startIndex: unit.map[at],
+                    endIndex: unit.map[at + textQuery.length - 1] + 1,
+                    text: textQuery,
+                });
+                from = at + textQuery.length;
+            }
+        }
+    }
+
+    return results;
 }
 
 // --- Paragraph Boundary Helper ---
