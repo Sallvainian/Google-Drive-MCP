@@ -443,3 +443,83 @@ describe('createDocument and tab-targeted documents.get', () => {
     );
   });
 });
+
+describe('findElement execute', () => {
+  beforeEach(() => {
+    docsGet.mock.resetCalls();
+    docsGet.mock.mockImplementation(async () => ({
+      data: {
+        body: {
+          content: [
+            { paragraph: { elements: [{ startIndex: 1, endIndex: 6, textRun: { content: 'abcd\n' } }] } },
+          ],
+        },
+      },
+    }));
+  });
+
+  it('returns the empty-found string when the helper finds nothing', async () => {
+    const result = await callTool('findElement', { documentId: 'doc1', textQuery: 'zzz' });
+    assert.strictEqual(
+      result,
+      'No matching elements found (textQuery=zzz, elementType=none).'
+    );
+  });
+
+  it('returns JSON with count and elements when there are hits', async () => {
+    docsGet.mock.mockImplementation(async () => ({
+      data: {
+        body: {
+          content: [
+            { paragraph: { elements: [{ startIndex: 1, endIndex: 14, textRun: { content: 'foundme here\n' } }] } },
+          ],
+        },
+      },
+    }));
+    const parsed = JSON.parse(await callTool('findElement', { documentId: 'doc1', textQuery: 'foundme' }));
+    assert.strictEqual(parsed.count, 1);
+    assert.deepStrictEqual(parsed.elements, [
+      { type: 'text', instance: 1, startIndex: 1, endIndex: 8, text: 'foundme' },
+    ]);
+  });
+
+  it('forwards elementType for listing and rejects list/image', async () => {
+    docsGet.mock.mockImplementation(async () => ({
+      data: {
+        body: {
+          content: [
+            { startIndex: 20, endIndex: 40, table: { rows: 2, columns: 3, tableRows: [] } },
+          ],
+        },
+      },
+    }));
+    const parsed = JSON.parse(await callTool('findElement', { documentId: 'doc1', elementType: 'table' }));
+    assert.deepStrictEqual(parsed, {
+      count: 1,
+      elements: [{ type: 'table', startIndex: 20, endIndex: 40, text: 'table 2x3' }],
+    });
+
+    await assert.rejects(
+      () => callTool('findElement', { documentId: 'doc1', elementType: 'list' }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'elementType "list" is not supported. Omit elementType and pass textQuery to locate content by text.'
+        );
+        return true;
+      }
+    );
+    await assert.rejects(
+      () => callTool('findElement', { documentId: 'doc1', elementType: 'image', textQuery: 'x' }),
+      (error) => {
+        assert.ok(error instanceof UserError);
+        assert.strictEqual(
+          error.message,
+          'elementType "image" is not supported. Omit elementType and pass textQuery to locate content by text.'
+        );
+        return true;
+      }
+    );
+  });
+});
