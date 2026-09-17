@@ -39,18 +39,20 @@ function addToolNames(source) {
 }
 
 function groupForIndex(index) {
-  if (index < 29) return 'docs';
-  if (index < 48) return 'drive';
-  if (index < 57) return 'sheets';
-  if (index < 61) return 'docs';
-  if (index < 79) return 'slides';
+  if (index < 41) return 'docs';
+  if (index < 44) return 'docs-chips';
+  if (index < 65) return 'drive';
+  if (index < 74) return 'sheets';
+  if (index < 104) return 'sheets-advanced';
+  if (index < 108) return 'docs';
+  if (index < 126) return 'slides';
   return 'gmail';
 }
 
 function expectedNamesForGroups(groups) {
   const source = readFileSync(join(srcDir, 'server.ts'), 'utf8');
   const names = addToolNames(source);
-  assert.equal(names.length, 113);
+  assert.equal(names.length, 160);
   const enabled = new Set(groups);
   return names.filter((_name, index) => enabled.has(groupForIndex(index)));
 }
@@ -161,26 +163,35 @@ describe('parseEnabledToolGroups', () => {
 });
 
 describe('group membership vs ADD_TOOL_NAMES', () => {
-  it('all and default-on families both map to the same 113 names today', () => {
+  it('default-on families map to 127 names and all maps to 160', () => {
     const unsetNames = expectedNamesForGroups([...DEFAULT_TOOL_GROUPS]);
     const allNames = expectedNamesForGroups([...TOOL_GROUPS]);
-    assert.equal(unsetNames.length, 113);
-    assert.deepStrictEqual(allNames, unsetNames);
+    assert.equal(unsetNames.length, 127);
+    assert.equal(allNames.length, 160);
+    assert.equal(unsetNames.includes('batchWrite'), false);
+    assert.equal(unsetNames.includes('insertDateChip'), false);
+    assert.equal(allNames.includes('batchWrite'), true);
+    assert.equal(allNames.includes('insertDateChip'), true);
   });
 
-  it('docs,sheets-advanced matches docs (opt-in families add zero tools)', () => {
+  it('docs is 45, sheets-advanced adds 30, docs-chips is the 3 chip names', () => {
     const docsNames = expectedNamesForGroups(['docs']);
     const withAdvanced = expectedNamesForGroups(['docs', 'sheets-advanced']);
     const chipsOnly = expectedNamesForGroups(['docs-chips']);
-    assert.equal(docsNames.length, 33);
-    assert.deepStrictEqual(withAdvanced, docsNames);
-    assert.deepStrictEqual(chipsOnly, []);
+    const advancedOnly = expectedNamesForGroups(['sheets-advanced']);
+    assert.equal(docsNames.length, 45);
+    assert.equal(withAdvanced.length, 75);
+    assert.equal(advancedOnly.length, 30);
+    assert.ok(advancedOnly.includes('batchWrite'));
+    assert.ok(advancedOnly.includes('createTable'));
+    assert.equal(advancedOnly.includes('readSpreadsheet'), false);
+    assert.deepStrictEqual(chipsOnly, ['insertDateChip', 'insertPerson', 'insertRichLink']);
   });
 
-  it('src/server.ts never assigns currentToolGroup to empty opt-in families', () => {
+  it('src/server.ts assigns currentToolGroup to sheets-advanced and docs-chips', () => {
     const source = readFileSync(join(srcDir, 'server.ts'), 'utf8');
-    assert.equal(source.includes("currentToolGroup = 'sheets-advanced'"), false);
-    assert.equal(source.includes("currentToolGroup = 'docs-chips'"), false);
+    assert.equal(source.includes("currentToolGroup = 'sheets-advanced'"), true);
+    assert.equal(source.includes("currentToolGroup = 'docs-chips'"), true);
   });
 });
 
@@ -219,7 +230,7 @@ describe('createStubAuthorizeEnv MCP_TOOL_GROUPS', () => {
 
 describe('live tools/list MCP_TOOL_GROUPS', () => {
   it(
-    'docs,drive,gmail lists 86 tools including createFormattedDocument and no Sheets/Slides',
+    'docs,drive,gmail lists 100 tools including createFormattedDocument and no Sheets/Slides',
     { timeout: 180000 },
     async () => {
       const listed = await listToolsOverStdio({
@@ -227,7 +238,7 @@ describe('live tools/list MCP_TOOL_GROUPS', () => {
       });
       const names = listed.tools.map((tool) => tool.name);
       const expected = expectedNamesForGroups(['docs', 'drive', 'gmail']);
-      assert.equal(expected.length, 86);
+      assert.equal(expected.length, 100);
       assert.deepStrictEqual(names, expected);
       assert.equal(names.includes('createFormattedDocument'), true);
       assert.equal(names.includes('addTab'), true);
@@ -242,16 +253,19 @@ describe('live tools/list MCP_TOOL_GROUPS', () => {
   );
 
   it(
-    'docs,sheets-advanced lists the same 33 tools as docs',
+    'docs,sheets-advanced lists 75 tools including the 30 advanced names',
     { timeout: 180000 },
     async () => {
       const listed = await listToolsOverStdio({
         env: { MCP_TOOL_GROUPS: 'docs,sheets-advanced' },
       });
       const names = listed.tools.map((tool) => tool.name);
-      const expected = expectedNamesForGroups(['docs']);
-      assert.equal(expected.length, 33);
+      const expected = expectedNamesForGroups(['docs', 'sheets-advanced']);
+      assert.equal(expected.length, 75);
       assert.deepStrictEqual(names, expected);
+      assert.equal(names.includes('batchWrite'), true);
+      assert.equal(names.includes('createTable'), true);
+      assert.equal(names.includes('insertDateChip'), false);
       assert.match(
         listed.stderr,
         /Registered tool groups: docs, sheets-advanced(?:\n|$)/,
@@ -260,7 +274,34 @@ describe('live tools/list MCP_TOOL_GROUPS', () => {
   );
 
   it(
-    'docs lists 33 tools including the four formatting tools and no Drive/Sheets/Slides/Gmail',
+    'docs-chips lists exactly insertDateChip, insertPerson, insertRichLink',
+    { timeout: 180000 },
+    async () => {
+      const listed = await listToolsOverStdio({
+        env: { MCP_TOOL_GROUPS: 'docs-chips' },
+      });
+      const names = listed.tools.map((tool) => tool.name);
+      assert.deepStrictEqual(names, ['insertDateChip', 'insertPerson', 'insertRichLink']);
+      assert.match(listed.stderr, /Registered tool groups: docs-chips(?:\n|$)/);
+    },
+  );
+
+  it(
+    'all lists 160 tools',
+    { timeout: 180000 },
+    async () => {
+      const listed = await listToolsOverStdio({
+        env: { MCP_TOOL_GROUPS: 'all' },
+      });
+      const names = listed.tools.map((tool) => tool.name);
+      const expected = expectedNamesForGroups([...TOOL_GROUPS]);
+      assert.equal(expected.length, 160);
+      assert.deepStrictEqual(names, expected);
+    },
+  );
+
+  it(
+    'docs lists 45 tools including the four formatting tools and no Drive/Sheets/Slides/Gmail',
     { timeout: 180000 },
     async () => {
       const listed = await listToolsOverStdio({
@@ -268,7 +309,7 @@ describe('live tools/list MCP_TOOL_GROUPS', () => {
       });
       const names = listed.tools.map((tool) => tool.name);
       const expected = expectedNamesForGroups(['docs']);
-      assert.equal(expected.length, 33);
+      assert.equal(expected.length, 45);
       assert.deepStrictEqual(names, expected);
       assert.equal(names[0], 'readGoogleDoc');
       assert.equal(names.includes('addTab'), true);

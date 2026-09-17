@@ -177,7 +177,7 @@ describe('startConfiguredTransport', () => {
   it('Start success http', { timeout: 180000 }, async () => {
     const listed = await listToolsOverHttpStream();
     const names = listed.tools.map((tool) => tool.name);
-    assert.strictEqual(names.length, 113);
+    assert.strictEqual(names.length, 127);
     assert.strictEqual(names[0], 'readGoogleDoc');
     assert.strictEqual(names[names.length - 1], 'send_draft');
     assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);
@@ -215,7 +215,7 @@ describe('startConfiguredTransport', () => {
   it('Start success stdio', { timeout: 180000 }, async () => {
     const listed = await listToolsOverStdio();
     const names = listed.tools.map((tool) => tool.name);
-    assert.strictEqual(names.length, 113);
+    assert.strictEqual(names.length, 127);
     assert.strictEqual(names[0], 'readGoogleDoc');
     assert.strictEqual(names[names.length - 1], 'send_draft');
     assert.deepStrictEqual(Object.keys(listed.listResults[0].result), ['tools']);

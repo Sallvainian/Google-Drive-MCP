@@ -243,17 +243,124 @@ export async function addSheet(
  * Parses A1 notation range to extract sheet name and cell range
  * Returns {sheetName, a1Range} where a1Range is just the cell part (e.g., "A1:B2")
  */
-function parseRange(range: string): { sheetName: string | null; a1Range: string } {
-  if (range.includes('!')) {
-    const parts = range.split('!');
+export function parseRange(range: string): { sheetName: string | null; a1Range: string } {
+  const idx = range.indexOf('!');
+  if (idx !== -1) {
     return {
-      sheetName: parts[0].replace(/^'|'$/g, ''), // Remove quotes if present
-      a1Range: parts[1],
+      sheetName: range.slice(0, idx).replace(/^'|'$/g, ''),
+      a1Range: range.slice(idx + 1),
     };
   }
   return {
     sheetName: null,
     a1Range: range,
+  };
+}
+
+/**
+ * Resolves a sheet name to a numeric sheet ID.
+ * If sheetName is null/undefined, returns the first sheet's ID.
+ */
+export async function resolveSheetId(
+  sheets: Sheets,
+  spreadsheetId: string,
+  sheetName?: string | null
+): Promise<number> {
+  const metadata = await getSpreadsheetMetadata(sheets, spreadsheetId);
+
+  if (sheetName) {
+    const sheet = metadata.sheets?.find((s) => s.properties?.title === sheetName);
+    if (!sheet || sheet.properties?.sheetId === undefined || sheet.properties?.sheetId === null) {
+      throw new UserError(`Sheet "${sheetName}" not found in spreadsheet.`);
+    }
+    return sheet.properties.sheetId;
+  }
+
+  const firstSheet = metadata.sheets?.[0];
+  if (firstSheet?.properties?.sheetId === undefined || firstSheet?.properties?.sheetId === null) {
+    throw new UserError('Spreadsheet has no sheets.');
+  }
+  return firstSheet.properties.sheetId;
+}
+
+/**
+ * Converts column letters to a 0-based column index.
+ * Example: "A" -> 0, "B" -> 1, "Z" -> 25, "AA" -> 26
+ */
+export function colLettersToIndex(col: string): number {
+  const upper = col.toUpperCase();
+  if (!/^[A-Z]+$/.test(upper)) {
+    throw new UserError(`Invalid column letters: "${col}".`);
+  }
+  let index = 0;
+  for (let i = 0; i < upper.length; i++) {
+    index = index * 26 + (upper.charCodeAt(i) - 64);
+  }
+  return index - 1;
+}
+
+/**
+ * Parses an A1-notation cell range string into a Google Sheets GridRange object.
+ * Supports standard "A1:B2", whole rows "1:1", and whole columns "A:A".
+ */
+function assertGridRangeOrder(
+  a1Range: string,
+  start: number,
+  end: number,
+  kind: 'row' | 'column'
+): void {
+  if (start < 0 || end <= start) {
+    throw new UserError(
+      `Invalid ${kind} range: "${a1Range}". Start must be >= 1 and not inverted.`
+    );
+  }
+}
+
+export function parseA1ToGridRange(a1Range: string, sheetId: number): sheets_v4.Schema$GridRange {
+  const rowOnlyMatch = a1Range.match(/^(\d+)(?::(\d+))?$/);
+  if (rowOnlyMatch) {
+    const startRow = parseInt(rowOnlyMatch[1], 10) - 1;
+    const endRow = rowOnlyMatch[2] ? parseInt(rowOnlyMatch[2], 10) : startRow + 1;
+    assertGridRangeOrder(a1Range, startRow, endRow, 'row');
+    return {
+      sheetId,
+      startRowIndex: startRow,
+      endRowIndex: endRow,
+    };
+  }
+
+  const colOnlyMatch = a1Range.match(/^([A-Z]+)(?::([A-Z]+))?$/i);
+  if (colOnlyMatch && !/\d/.test(a1Range)) {
+    const startCol = colLettersToIndex(colOnlyMatch[1]);
+    const endCol = colOnlyMatch[2] ? colLettersToIndex(colOnlyMatch[2]) + 1 : startCol + 1;
+    assertGridRangeOrder(a1Range, startCol, endCol, 'column');
+    return {
+      sheetId,
+      startColumnIndex: startCol,
+      endColumnIndex: endCol,
+    };
+  }
+
+  const standardMatch = a1Range.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
+  if (!standardMatch) {
+    throw new UserError(
+      `Invalid range format: "${a1Range}". Expected "A1:B2", "1:1" (whole row), or "A:A" (whole column).`
+    );
+  }
+
+  const startCol = colLettersToIndex(standardMatch[1]);
+  const startRow = parseInt(standardMatch[2], 10) - 1;
+  const endCol = standardMatch[3] ? colLettersToIndex(standardMatch[3]) + 1 : startCol + 1;
+  const endRow = standardMatch[4] ? parseInt(standardMatch[4], 10) : startRow + 1;
+  assertGridRangeOrder(a1Range, startRow, endRow, 'row');
+  assertGridRangeOrder(a1Range, startCol, endCol, 'column');
+
+  return {
+    sheetId,
+    startRowIndex: startRow,
+    endRowIndex: endRow,
+    startColumnIndex: startCol,
+    endColumnIndex: endCol,
   };
 }
 
@@ -275,58 +382,14 @@ export async function formatCells(
     };
     horizontalAlignment?: 'LEFT' | 'CENTER' | 'RIGHT';
     verticalAlignment?: 'TOP' | 'MIDDLE' | 'BOTTOM';
+    wrapStrategy?: 'OVERFLOW_CELL' | 'CLIP' | 'WRAP';
+    numberFormat?: { type: string; pattern?: string };
   }
 ): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
   try {
-    // Parse the range to get sheet name and cell range
     const { sheetName, a1Range } = parseRange(range);
-
-    // Get spreadsheet metadata to find sheetId
-    const metadata = await getSpreadsheetMetadata(sheets, spreadsheetId);
-    let sheetId: number | undefined;
-
-    if (sheetName) {
-      // Find the sheet by name
-      const sheet = metadata.sheets?.find(s => s.properties?.title === sheetName);
-      if (!sheet || !sheet.properties?.sheetId) {
-        throw new UserError(`Sheet "${sheetName}" not found in spreadsheet.`);
-      }
-      sheetId = sheet.properties.sheetId;
-    } else {
-      // Use the first sheet
-      const firstSheet = metadata.sheets?.[0];
-      if (!firstSheet?.properties?.sheetId) {
-        throw new UserError('Spreadsheet has no sheets.');
-      }
-      sheetId = firstSheet.properties.sheetId;
-    }
-
-    if (sheetId === undefined) {
-      throw new UserError('Could not determine sheet ID.');
-    }
-
-    // Parse A1 range to get row/column indices
-    const rangeMatch = a1Range.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
-    if (!rangeMatch) {
-      throw new UserError(`Invalid range format: ${a1Range}. Expected format like "A1" or "A1:B2"`);
-    }
-
-    const startCol = rangeMatch[1].toUpperCase();
-    const startRow = parseInt(rangeMatch[2], 10) - 1; // Convert to 0-based
-    const endCol = rangeMatch[3] ? rangeMatch[3].toUpperCase() : startCol;
-    const endRow = rangeMatch[4] ? parseInt(rangeMatch[4], 10) - 1 : startRow; // Convert to 0-based
-
-    // Convert column letters to 0-based indices
-    function colToIndex(col: string): number {
-      let index = 0;
-      for (let i = 0; i < col.length; i++) {
-        index = index * 26 + (col.charCodeAt(i) - 64);
-      }
-      return index - 1;
-    }
-
-    const startColIndex = colToIndex(startCol);
-    const endColIndex = colToIndex(endCol);
+    const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
+    const gridRange = parseA1ToGridRange(a1Range, sheetId);
 
     const userEnteredFormat: sheets_v4.Schema$CellFormat = {};
 
@@ -368,23 +431,37 @@ export async function formatCells(
       userEnteredFormat.verticalAlignment = format.verticalAlignment;
     }
 
+    if (format.wrapStrategy) {
+      userEnteredFormat.wrapStrategy = format.wrapStrategy;
+    }
+
+    if (format.numberFormat) {
+      userEnteredFormat.numberFormat = {
+        type: format.numberFormat.type,
+        ...(format.numberFormat.pattern !== undefined ? { pattern: format.numberFormat.pattern } : {}),
+      };
+    }
+
+    const formatFields = [
+      ...(userEnteredFormat.backgroundColor ? ['backgroundColor'] : []),
+      ...(userEnteredFormat.textFormat ? ['textFormat'] : []),
+      ...(userEnteredFormat.horizontalAlignment ? ['horizontalAlignment'] : []),
+      ...(userEnteredFormat.verticalAlignment ? ['verticalAlignment'] : []),
+      ...(userEnteredFormat.wrapStrategy ? ['wrapStrategy'] : []),
+      ...(userEnteredFormat.numberFormat ? ['numberFormat'] : []),
+    ];
+
     const response = await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
       requestBody: {
         requests: [
           {
             repeatCell: {
-              range: {
-                sheetId: sheetId,
-                startRowIndex: startRow,
-                endRowIndex: endRow + 1, // endRowIndex is exclusive
-                startColumnIndex: startColIndex,
-                endColumnIndex: endColIndex + 1, // endColumnIndex is exclusive
-              },
+              range: gridRange,
               cell: {
                 userEnteredFormat,
               },
-              fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)',
+              fields: `userEnteredFormat(${formatFields.join(',')})`,
             },
           },
         ],
@@ -423,5 +500,506 @@ export function hexToRgb(hex: string): { red: number; green: number; blue: numbe
     green: ((bigint >> 8) & 255) / 255,
     blue: (bigint & 255) / 255,
   };
+}
+
+export async function setCellNote(
+  sheets: Sheets,
+  spreadsheetId: string,
+  range: string,
+  note: string | null
+): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
+  try {
+    const { sheetName, a1Range } = parseRange(range);
+    const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
+    const gridRange = parseA1ToGridRange(a1Range, sheetId);
+
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            repeatCell: {
+              range: gridRange,
+              cell: { note },
+              fields: 'note',
+            },
+          },
+        ],
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+    }
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set cell note: ${error.message || 'Unknown error'}`);
+  }
+}
+
+export async function freezeRowsAndColumns(
+  sheets: Sheets,
+  spreadsheetId: string,
+  sheetName?: string | null,
+  frozenRows?: number,
+  frozenColumns?: number
+): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
+  try {
+    const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
+
+    const gridProperties: sheets_v4.Schema$GridProperties = {};
+    const fieldParts: string[] = [];
+
+    if (frozenRows !== undefined) {
+      gridProperties.frozenRowCount = frozenRows;
+      fieldParts.push('gridProperties.frozenRowCount');
+    }
+    if (frozenColumns !== undefined) {
+      gridProperties.frozenColumnCount = frozenColumns;
+      fieldParts.push('gridProperties.frozenColumnCount');
+    }
+
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId,
+                gridProperties,
+              },
+              fields: fieldParts.join(','),
+            },
+          },
+        ],
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+    }
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to freeze rows/columns: ${error.message || 'Unknown error'}`);
+  }
+}
+
+export async function setDropdownValidation(
+  sheets: Sheets,
+  spreadsheetId: string,
+  range: string,
+  values?: string[],
+  strict: boolean = true,
+  inputMessage?: string
+): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
+  try {
+    const { sheetName, a1Range } = parseRange(range);
+    const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
+    const gridRange = parseA1ToGridRange(a1Range, sheetId);
+
+    const rule =
+      values && values.length > 0
+        ? {
+            condition: {
+              type: 'ONE_OF_LIST' as const,
+              values: values.map((v) => ({ userEnteredValue: v })),
+            },
+            showCustomUi: true,
+            strict,
+            inputMessage: inputMessage || null,
+          }
+        : undefined;
+
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            setDataValidation: {
+              range: gridRange,
+              rule,
+            },
+          },
+        ],
+      },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+    }
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set dropdown validation: ${error.message || 'Unknown error'}`);
+  }
+}
+
+export async function setColumnWidths(
+  sheets: Sheets,
+  spreadsheetId: string,
+  sheetName: string | null | undefined,
+  columnWidths: Array<{ column: string; width: number }>
+): Promise<sheets_v4.Schema$BatchUpdateSpreadsheetResponse> {
+  try {
+    const sheetId = await resolveSheetId(sheets, spreadsheetId, sheetName);
+
+    const requests: sheets_v4.Schema$Request[] = columnWidths.map(({ column, width }) => {
+      const colonIdx = column.indexOf(':');
+      let startIndex: number;
+      let endIndex: number;
+
+      if (colonIdx !== -1) {
+        startIndex = colLettersToIndex(column.slice(0, colonIdx).trim());
+        endIndex = colLettersToIndex(column.slice(colonIdx + 1).trim()) + 1;
+      } else {
+        startIndex = colLettersToIndex(column.trim());
+        endIndex = startIndex + 1;
+      }
+      if (startIndex < 0 || endIndex <= startIndex) {
+        throw new UserError(`Invalid column range: "${column}".`);
+      }
+
+      return {
+        updateDimensionProperties: {
+          range: {
+            sheetId,
+            dimension: 'COLUMNS',
+            startIndex,
+            endIndex,
+          },
+          properties: {
+            pixelSize: width,
+          },
+          fields: 'pixelSize',
+        },
+      };
+    });
+
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
+    });
+
+    return response.data;
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+    }
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set column widths: ${error.message || 'Unknown error'}`);
+  }
+}
+
+export async function addConditionalFormatRule(
+  sheets: Sheets,
+  spreadsheetId: string,
+  ranges: sheets_v4.Schema$GridRange[],
+  conditionType: string,
+  conditionValues: Array<{ userEnteredValue: string }>,
+  format: Record<string, unknown>
+): Promise<void> {
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addConditionalFormatRule: {
+              rule: {
+                ranges,
+                booleanRule: {
+                  condition: {
+                    type: conditionType,
+                    values: conditionValues,
+                  },
+                  format,
+                },
+              },
+              index: 0,
+            },
+          },
+        ],
+      },
+    });
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Spreadsheet not found (ID: ${spreadsheetId}). Check the ID.`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied for spreadsheet (ID: ${spreadsheetId}). Ensure you have write access.`);
+    }
+    throw new UserError(
+      `Failed to add conditional format rule: ${error.message || 'Unknown error'}`
+    );
+  }
+}
+
+export async function resolveTableIdentifier(
+  sheets: Sheets,
+  spreadsheetId: string,
+  tableIdentifier: string
+): Promise<{
+  table: sheets_v4.Schema$Table;
+  sheetId: number;
+  sheetName: string;
+}> {
+  const metadata = await getSpreadsheetMetadata(sheets, spreadsheetId);
+
+  for (const sheet of metadata.sheets || []) {
+    if (sheet.properties?.sheetId === null || sheet.properties?.sheetId === undefined) {
+      continue;
+    }
+
+    const sheetName = sheet.properties.title || 'Unknown';
+    const tables = sheet.tables || [];
+
+    for (const table of tables) {
+      if (!table) continue;
+
+      const idMatch = table.tableId === tableIdentifier;
+      const nameMatch = table.name
+        ? table.name.toLowerCase() === tableIdentifier.toLowerCase()
+        : false;
+
+      if (idMatch || nameMatch) {
+        if (sheet.properties.sheetId === null || sheet.properties.sheetId === undefined) {
+          throw new UserError(`Sheet "${sheetName}" has invalid ID.`);
+        }
+        return {
+          table,
+          sheetId: sheet.properties.sheetId,
+          sheetName,
+        };
+      }
+    }
+  }
+
+  throw new UserError(
+    `Table "${tableIdentifier}" not found in spreadsheet. Use listTables to see available tables.`
+  );
+}
+
+export async function listAllTables(
+  sheets: Sheets,
+  spreadsheetId: string,
+  sheetNameFilter?: string
+): Promise<
+  Array<{
+    table: sheets_v4.Schema$Table;
+    sheetName: string;
+    sheetId: number;
+  }>
+> {
+  const metadata = await getSpreadsheetMetadata(sheets, spreadsheetId);
+  const result: Array<{
+    table: sheets_v4.Schema$Table;
+    sheetName: string;
+    sheetId: number;
+  }> = [];
+
+  for (const sheet of metadata.sheets || []) {
+    if (sheet.properties?.sheetId === null || sheet.properties?.sheetId === undefined) {
+      continue;
+    }
+
+    if (sheetNameFilter && sheet.properties.title !== sheetNameFilter) continue;
+
+    const sheetName = sheet.properties.title || 'Unknown';
+    const tables = sheet.tables || [];
+
+    for (const table of tables) {
+      if (table) {
+        result.push({
+          table,
+          sheetName,
+          sheetId: sheet.properties.sheetId,
+        });
+      }
+    }
+  }
+
+  return result;
+}
+
+export async function createTableHelper(
+  sheets: Sheets,
+  spreadsheetId: string,
+  tableDefinition: {
+    name: string;
+    range: sheets_v4.Schema$GridRange;
+    columnProperties?: sheets_v4.Schema$TableColumnProperties[];
+    rowsProperties?: sheets_v4.Schema$TableRowsProperties;
+  }
+): Promise<sheets_v4.Schema$Table> {
+  try {
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            addTable: {
+              table: {
+                name: tableDefinition.name,
+                range: tableDefinition.range,
+                columnProperties: tableDefinition.columnProperties,
+                rowsProperties: tableDefinition.rowsProperties,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const reply = response.data.replies?.[0]?.addTable;
+    if (!reply?.table) {
+      throw new UserError('Failed to create table - no table returned in response.');
+    }
+
+    return reply.table;
+  } catch (error: any) {
+    if (error.code === 400) {
+      throw new UserError(`Invalid table definition: ${error.message}`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
+    }
+    throw error;
+  }
+}
+
+export async function deleteTableHelper(
+  sheets: Sheets,
+  spreadsheetId: string,
+  tableId: string
+): Promise<void> {
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            deleteTable: {
+              tableId,
+            },
+          },
+        ],
+      },
+    });
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Table not found (ID: ${tableId}).`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
+    }
+    throw error;
+  }
+}
+
+export async function updateTableRangeHelper(
+  sheets: Sheets,
+  spreadsheetId: string,
+  tableId: string,
+  newRange: sheets_v4.Schema$GridRange
+): Promise<sheets_v4.Schema$Table> {
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            updateTable: {
+              table: {
+                tableId,
+                range: newRange,
+              },
+              fields: 'range',
+            },
+          },
+        ],
+      },
+    });
+
+    const { table } = await resolveTableIdentifier(sheets, spreadsheetId, tableId);
+    return table;
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Table not found (ID: ${tableId}).`);
+    }
+    if (error.code === 400) {
+      throw new UserError(`Invalid range: ${error.message}`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
+    }
+    throw error;
+  }
+}
+
+export async function appendToTableHelper(
+  sheets: Sheets,
+  spreadsheetId: string,
+  tableId: string,
+  values: any[][],
+  valueInputOption: 'RAW' | 'USER_ENTERED' = 'USER_ENTERED'
+): Promise<{ rowsAppended: number; updatedRange: string }> {
+  try {
+    const { table, sheetName } = await resolveTableIdentifier(sheets, spreadsheetId, tableId);
+
+    if (!table.range) {
+      throw new UserError('Table does not have a range defined.');
+    }
+
+    const startRowIndex = table.range.endRowIndex || 0;
+    const startColumnIndex = table.range.startColumnIndex || 0;
+    const endColumnIndex = table.range.endColumnIndex || 0;
+    const quotedSheet = "'" + sheetName.replace(/'/g, "''") + "'";
+
+    const range = `${quotedSheet}!${rowColToA1(startRowIndex, startColumnIndex)}:${rowColToA1(
+      startRowIndex + values.length - 1,
+      endColumnIndex - 1
+    )}`;
+
+    const response = await sheets.spreadsheets.values.append({
+      spreadsheetId,
+      range,
+      valueInputOption,
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values,
+      },
+    });
+
+    return {
+      rowsAppended: values.length,
+      updatedRange: response.data.updates?.updatedRange || range,
+    };
+  } catch (error: any) {
+    if (error.code === 404) {
+      throw new UserError(`Table or spreadsheet not found (ID: ${tableId}).`);
+    }
+    if (error.code === 400) {
+      throw new UserError(`Invalid data: ${error.message}`);
+    }
+    if (error.code === 403) {
+      throw new UserError(`Permission denied. Ensure you have write access to this spreadsheet.`);
+    }
+    throw error;
+  }
 }
 

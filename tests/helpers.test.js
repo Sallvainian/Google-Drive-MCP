@@ -1,5 +1,6 @@
 // tests/helpers.test.js
 import { findTextRange, getTableCellRange, getParagraphRange, FIND_TEXT_RANGE_FIELDS, GET_PARAGRAPH_RANGE_FIELDS, GET_TABLE_CELL_RANGE_FIELDS } from '../dist/googleDocsApiHelpers.js';
+import { parseA1ToGridRange } from '../dist/googleSheetsApiHelpers.js';
 import { UserError } from 'fastmcp';
 import assert from 'node:assert';
 import { describe, it, mock } from 'node:test';
@@ -539,6 +540,28 @@ describe('Paragraph Range Finding', () => {
         mockDocs.documents.get.mock.calls[0].arguments[0].fields,
         GET_PARAGRAPH_RANGE_FIELDS
       );
+    });
+  });
+});
+
+describe('parseA1ToGridRange', () => {
+  it('parses A1:B2, 1:1, and A:A', () => {
+    assert.deepStrictEqual(parseA1ToGridRange('A1:B2', 0), {
+      sheetId: 0,
+      startRowIndex: 0,
+      endRowIndex: 2,
+      startColumnIndex: 0,
+      endColumnIndex: 2,
+    });
+    assert.deepStrictEqual(parseA1ToGridRange('1:1', 0), {
+      sheetId: 0,
+      startRowIndex: 0,
+      endRowIndex: 1,
+    });
+    assert.deepStrictEqual(parseA1ToGridRange('A:A', 0), {
+      sheetId: 0,
+      startColumnIndex: 0,
+      endColumnIndex: 1,
     });
   });
 });

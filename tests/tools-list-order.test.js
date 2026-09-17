@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 
 const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 
-const ADD_TOOL_NAMES = [
+const ALL_ADD_TOOL_NAMES = [
   'readGoogleDoc',
   'listDocumentTabs',
   'addTab',
@@ -25,12 +25,24 @@ const ADD_TOOL_NAMES = [
   'replaceAllText',
   'deleteRange',
   'applyTextStyle',
+  'modifyText',
+  'batchApplyTextStyle',
   'applyParagraphStyle',
   'insertTable',
+  'insertTableWithData',
+  'listDocumentTables',
+  'cloneTable',
+  'replaceTableRowData',
+  'updateTableBorders',
+  'updateTableColumnWidth',
+  'updateTableRowStyle',
+  'updateTableCellStyle',
   'editTableCell',
   'insertDocTableRow',
   'deleteDocTableRow',
   'insertPageBreak',
+  'insertSectionBreak',
+  'updateSectionStyle',
   'insertImageFromUrl',
   'insertLocalImage',
   'fixListFormatting',
@@ -42,8 +54,13 @@ const ADD_TOOL_NAMES = [
   'deleteComment',
   'findElement',
   'formatMatchingText',
+  'insertDateChip',
+  'insertPerson',
+  'insertRichLink',
   'listGoogleDocs',
   'searchGoogleDocs',
+  'listDriveFiles',
+  'searchDriveFiles',
   'getRecentGoogleDocs',
   'getDocumentInfo',
   'createFolder',
@@ -70,6 +87,36 @@ const ADD_TOOL_NAMES = [
   'formatSpreadsheetCells',
   'createSpreadsheet',
   'listGoogleSheets',
+  'batchWrite',
+  'deleteSheet',
+  'duplicateSheet',
+  'copySheetTo',
+  'renameSheet',
+  'copyFormatting',
+  'readCellFormat',
+  'setCellBorders',
+  'freezeRowsAndColumns',
+  'setDropdownValidation',
+  'setColumnWidths',
+  'setRowHeights',
+  'autoResizeColumns',
+  'autoResizeRows',
+  'protectRange',
+  'addConditionalFormatting',
+  'getConditionalFormatting',
+  'deleteConditionalFormatting',
+  'groupRows',
+  'ungroupAllRows',
+  'insertChart',
+  'deleteChart',
+  'createTable',
+  'listTables',
+  'getTable',
+  'deleteTable',
+  'updateTableRange',
+  'appendTableRows',
+  'createSheetsComment',
+  'createSheetsCellNote',
   'createFormattedDocument',
   'insertFormattedContent',
   'replaceDocumentContent',
@@ -128,6 +175,44 @@ const ADD_TOOL_NAMES = [
   'send_draft',
 ];
 
+const OPT_IN_TOOL_NAMES = new Set([
+  'insertDateChip',
+  'insertPerson',
+  'insertRichLink',
+  'batchWrite',
+  'deleteSheet',
+  'duplicateSheet',
+  'copySheetTo',
+  'renameSheet',
+  'copyFormatting',
+  'readCellFormat',
+  'setCellBorders',
+  'freezeRowsAndColumns',
+  'setDropdownValidation',
+  'setColumnWidths',
+  'setRowHeights',
+  'autoResizeColumns',
+  'autoResizeRows',
+  'protectRange',
+  'addConditionalFormatting',
+  'getConditionalFormatting',
+  'deleteConditionalFormatting',
+  'groupRows',
+  'ungroupAllRows',
+  'insertChart',
+  'deleteChart',
+  'createTable',
+  'listTables',
+  'getTable',
+  'deleteTable',
+  'updateTableRange',
+  'appendTableRows',
+  'createSheetsComment',
+  'createSheetsCellNote',
+]);
+
+const ADD_TOOL_NAMES = ALL_ADD_TOOL_NAMES.filter((name) => !OPT_IN_TOOL_NAMES.has(name));
+
 function addToolNames(source) {
   const names = [];
   const marker = 'server.addTool({';
@@ -149,18 +234,27 @@ function addToolNames(source) {
 }
 
 describe('tools/list registration order', () => {
-  it('lists 113 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
+  it('lists 160 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
     const source = readFileSync(join(srcDir, 'server.ts'), 'utf8');
     const names = addToolNames(source);
-    assert.deepStrictEqual(names, ADD_TOOL_NAMES);
-    assert.strictEqual(names.length, 113);
+    assert.deepStrictEqual(names, ALL_ADD_TOOL_NAMES);
+    assert.strictEqual(names.length, 160);
+    assert.strictEqual(ADD_TOOL_NAMES.length, 127);
     assert.ok(names.includes('addTab'));
     assert.ok(names.includes('renameTab'));
     assert.ok(names.includes('replaceDocumentWithMarkdown'));
     assert.ok(names.includes('appendMarkdownToGoogleDoc'));
     assert.ok(names.includes('replaceRangeWithMarkdown'));
+    assert.ok(names.includes('insertTableWithData'));
+    assert.ok(names.includes('listDriveFiles'));
+    assert.ok(names.includes('batchWrite'));
+    assert.ok(names.includes('insertDateChip'));
     assert.equal(names.includes('appendMarkdown'), false);
     assert.equal(names.includes('findAndReplace'), false);
+    assert.equal(ADD_TOOL_NAMES.includes('batchWrite'), false);
+    assert.equal(ADD_TOOL_NAMES.includes('insertDateChip'), false);
+    assert.equal(ADD_TOOL_NAMES.includes('findAndReplace'), false);
+    assert.equal(ADD_TOOL_NAMES.includes('setFilePermission'), false);
   });
 
   it('does not put ttlMs or cacheScope in src/', () => {
