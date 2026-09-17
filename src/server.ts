@@ -48,6 +48,7 @@ import * as GmailHelpers from './googleGmailApiHelpers.js';
 import * as LabelManager from './gmailLabelManager.js';
 import * as FilterManager from './gmailFilterManager.js';
 import * as McpTransport from './mcpTransport.js';
+import { parseEnabledToolGroups, type ToolGroup } from './toolGroups.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
@@ -162,6 +163,25 @@ const server = new FastMCP({
     ? { authenticate: McpTransport.createBearerAuthenticate(process.env.MCP_HTTP_TOKEN) }
     : {}),
 });
+
+let enabledToolGroups: ToolGroup[];
+try {
+  enabledToolGroups = parseEnabledToolGroups();
+} catch (error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`FATAL: Invalid MCP_TOOL_GROUPS: ${message}`);
+  process.exit(1);
+}
+console.error(`Registered tool groups: ${enabledToolGroups.join(', ')}`);
+
+const enabledToolGroupSet = new Set<ToolGroup>(enabledToolGroups);
+let currentToolGroup: ToolGroup = 'docs';
+const originalAddTool = server.addTool.bind(server);
+server.addTool = ((tool: Parameters<FastMCP['addTool']>[0]) => {
+  if (enabledToolGroupSet.has(currentToolGroup)) {
+    originalAddTool(tool);
+  }
+}) as typeof server.addTool;
 
 // --- Helper to get Docs client within tools ---
 async function getDocsClient() {
@@ -1519,6 +1539,7 @@ execute: async (args, { log }) => {
 });
 
 // === GOOGLE DRIVE TOOLS ===
+currentToolGroup = 'drive';
 
 server.addTool({
 name: 'listGoogleDocs',
@@ -2789,6 +2810,7 @@ try {
 });
 
 // === GOOGLE SHEETS TOOLS ===
+currentToolGroup = 'sheets';
 
 server.addTool({
 name: 'readSpreadsheet',
@@ -3172,6 +3194,7 @@ execute: async (args, { log }) => {
 });
 
 // === ENHANCED FORMATTING TOOLS ===
+currentToolGroup = 'docs';
 
 // Schema for structured content sections
 const FormattedSectionSchema = z.object({
@@ -3338,6 +3361,7 @@ Example: To replace everything under "Block 2: Activities" with new content:
 });
 
 // === GOOGLE SLIDES TOOLS ===
+currentToolGroup = 'slides';
 
 // --- List/Search Tools ---
 
@@ -4477,6 +4501,7 @@ server.addTool({
 // ========================================
 // === GMAIL TOOLS ===
 // ========================================
+currentToolGroup = 'gmail';
 
 // --- send_email ---
 server.addTool({

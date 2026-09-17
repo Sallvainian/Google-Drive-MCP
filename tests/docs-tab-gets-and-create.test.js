@@ -118,6 +118,7 @@ registerHooks({
 
 process.env.MCP_TRANSPORT = 'httpStream';
 delete process.env.MCP_HTTP_TOKEN;
+delete process.env.MCP_TOOL_GROUPS;
 
 await import('../dist/server.js');
 

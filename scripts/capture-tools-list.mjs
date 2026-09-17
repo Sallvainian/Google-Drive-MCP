@@ -54,6 +54,7 @@ async function capture() {
   const env = { ...process.env };
   delete env.GOOGLE_REFRESH_TOKEN;
   delete env.SERVICE_ACCOUNT_PATH;
+  delete env.MCP_TOOL_GROUPS;
   env.TOKEN_PATH = join(here, '.no-token.json');
   env.CREDENTIALS_PATH = join(here, '.no-credentials.json');
   env.MCP_TRANSPORT = 'stdio';

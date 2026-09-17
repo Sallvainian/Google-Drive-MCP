@@ -46,6 +46,9 @@ export function createStubAuthorizeEnv(overrides = {}) {
   delete env.GOOGLE_REFRESH_TOKEN;
   delete env.SERVICE_ACCOUNT_PATH;
   delete env.MCP_HTTP_TOKEN;
+  if (!Object.hasOwn(overrides, 'MCP_TOOL_GROUPS')) {
+    delete env.MCP_TOOL_GROUPS;
+  }
   env.TOKEN_PATH = join(scriptsDir, '.no-token.json');
   env.CREDENTIALS_PATH = join(scriptsDir, '.no-credentials.json');
   return env;
@@ -497,8 +500,11 @@ async function handshakeHttp(url, timeoutMs, childExit) {
   };
 }
 
-export async function listToolsOverStdio({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-  const env = createStubAuthorizeEnv({ MCP_TRANSPORT: 'stdio' });
+export async function listToolsOverStdio({
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  env: envOverrides = {},
+} = {}) {
+  const env = createStubAuthorizeEnv({ ...envOverrides, MCP_TRANSPORT: 'stdio' });
   const child = spawnLiveServer(env);
   const { state, stderrChunks } = attachChild(child, { parseStdoutJsonRpc: true });
   let finished = false;
@@ -519,9 +525,11 @@ export async function listToolsOverStdio({ timeoutMs = DEFAULT_TIMEOUT_MS } = {}
 export async function listToolsOverHttpStream({
   timeoutMs = DEFAULT_TIMEOUT_MS,
   host = '127.0.0.1',
+  env: envOverrides = {},
 } = {}) {
   const port = await allocateLoopbackPort(host);
   const env = createStubAuthorizeEnv({
+    ...envOverrides,
     MCP_TRANSPORT: 'httpStream',
     MCP_HOST: host,
     MCP_PORT: String(port),
