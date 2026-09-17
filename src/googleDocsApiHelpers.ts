@@ -485,7 +485,8 @@ try {
 export function buildUpdateTextStyleRequest(
 startIndex: number,
 endIndex: number,
-style: TextStyleArgs
+style: TextStyleArgs,
+tabId?: string
 ): { request: docs_v1.Schema$Request, fields: string[] } | null {
     const textStyle: docs_v1.Schema$TextStyle = {};
 const fieldsToUpdate: string[] = [];
@@ -513,9 +514,14 @@ const fieldsToUpdate: string[] = [];
 
     if (fieldsToUpdate.length === 0) return null; // No styles to apply
 
+    const range: docs_v1.Schema$Range = { startIndex, endIndex };
+    if (tabId) {
+        range.tabId = tabId;
+    }
+
     const request: docs_v1.Schema$Request = {
         updateTextStyle: {
-            range: { startIndex, endIndex },
+            range,
             textStyle: textStyle,
             fields: fieldsToUpdate.join(','),
         }
@@ -527,7 +533,8 @@ const fieldsToUpdate: string[] = [];
 export function buildUpdateParagraphStyleRequest(
 startIndex: number,
 endIndex: number,
-style: ParagraphStyleArgs
+style: ParagraphStyleArgs,
+tabId?: string
 ): { request: docs_v1.Schema$Request, fields: string[] } | null {
     // Create style object and track which fields to update
     const paragraphStyle: docs_v1.Schema$ParagraphStyle = {};
@@ -588,10 +595,15 @@ style: ParagraphStyleArgs
         return null; // No styles to apply
     }
 
+    const range: docs_v1.Schema$Range = { startIndex, endIndex };
+    if (tabId) {
+        range.tabId = tabId;
+    }
+
     // Build the request object
     const request: docs_v1.Schema$Request = {
         updateParagraphStyle: {
-            range: { startIndex, endIndex },
+            range,
             paragraphStyle: paragraphStyle,
             fields: fieldsToUpdate.join(','),
         }

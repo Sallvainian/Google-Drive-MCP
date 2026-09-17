@@ -135,6 +135,17 @@ this.name = "NotImplementedError";
 }
 }
 
+export class MarkdownConversionError extends Error {
+  constructor(
+    message: string,
+    public markdownPosition?: number,
+    public tokenType?: string
+  ) {
+    super(message);
+    this.name = 'MarkdownConversionError';
+  }
+}
+
 // === GOOGLE SLIDES SCHEMA FRAGMENTS ===
 
 export const PresentationIdParameter = z.object({

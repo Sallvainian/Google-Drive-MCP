@@ -1,9 +1,9 @@
 {
   "surfaces": {
     "full": {
-      "tools": 108,
-      "total_tokens": 18200,
-      "average": 169
+      "tools": 111,
+      "total_tokens": 20265,
+      "average": 183
     }
   },
   "thresholds": {
