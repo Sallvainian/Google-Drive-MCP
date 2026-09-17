@@ -15,6 +15,8 @@ const srcDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const ADD_TOOL_NAMES = [
   'readGoogleDoc',
   'listDocumentTabs',
+  'addTab',
+  'renameTab',
   'appendToGoogleDoc',
   'replaceDocumentWithMarkdown',
   'appendMarkdownToGoogleDoc',
@@ -147,11 +149,13 @@ function addToolNames(source) {
 }
 
 describe('tools/list registration order', () => {
-  it('lists 111 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
+  it('lists 113 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
     const source = readFileSync(join(srcDir, 'server.ts'), 'utf8');
     const names = addToolNames(source);
     assert.deepStrictEqual(names, ADD_TOOL_NAMES);
-    assert.strictEqual(names.length, 111);
+    assert.strictEqual(names.length, 113);
+    assert.ok(names.includes('addTab'));
+    assert.ok(names.includes('renameTab'));
     assert.ok(names.includes('replaceDocumentWithMarkdown'));
     assert.ok(names.includes('appendMarkdownToGoogleDoc'));
     assert.ok(names.includes('replaceRangeWithMarkdown'));

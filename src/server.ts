@@ -478,6 +478,81 @@ execute: async (args, { log }) => {
 });
 
 server.addTool({
+name: 'addTab',
+description: 'Adds a new tab to a Google Document. Optionally set title, position, parent tab, and icon emoji.',
+parameters: DocumentIdParameter.extend({
+  title: z.string().min(1).optional().describe('Tab title. Omitted: Google Docs assigns a default name.'),
+  parentTabId: z.string().min(1).optional().describe('Parent tab ID to nest under. Omitted: root-level tab.'),
+  index: z.number().int().min(0).optional().describe('Zero-based position among sibling tabs. Omitted: added at the end.'),
+  iconEmoji: z.string().min(1).optional().describe('Emoji for the tab icon.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Adding new tab to doc ${args.documentId}`);
+  try {
+    if (args.parentTabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.parentTabId);
+    }
+
+    const tabProperties: docs_v1.Schema$TabProperties = {};
+    if (args.title !== undefined) tabProperties.title = args.title;
+    if (args.parentTabId !== undefined) tabProperties.parentTabId = args.parentTabId;
+    if (args.index !== undefined) tabProperties.index = args.index;
+    if (args.iconEmoji !== undefined) tabProperties.iconEmoji = args.iconEmoji;
+
+    const result = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+      { addDocumentTab: { tabProperties } },
+    ]);
+    const newTabProps = result.replies?.[0]?.addDocumentTab?.tabProperties;
+    if (!newTabProps?.tabId) {
+      return 'Tab created successfully, but could not retrieve the new tab details.';
+    }
+    return JSON.stringify({
+      message: `Successfully added new tab "${newTabProps.title || '(untitled)'}"`,
+      tabId: newTabProps.tabId,
+      title: newTabProps.title,
+      index: newTabProps.index,
+      parentTabId: newTabProps.parentTabId,
+      nestingLevel: newTabProps.nestingLevel,
+    });
+  } catch (error: any) {
+    log.error(`Error adding tab to doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to add tab: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'renameTab',
+description: 'Renames a tab in a Google Document. Use listDocumentTabs to get tab IDs.',
+parameters: DocumentIdParameter.extend({
+  tabId: z.string().min(1).describe('The ID of the tab to rename. Use listDocumentTabs to get tab IDs.'),
+  newTitle: z.string().min(1).describe('The new title for the tab.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Renaming tab ${args.tabId} to "${args.newTitle}" in doc ${args.documentId}`);
+  try {
+    await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+      {
+        updateDocumentTabProperties: {
+          tabProperties: { tabId: args.tabId, title: args.newTitle },
+          fields: 'title',
+        },
+      },
+    ]);
+    return `Successfully renamed tab "${args.tabId}" to "${args.newTitle}".`;
+  } catch (error: any) {
+    log.error(`Error renaming tab in doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to rename tab: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
 name: 'appendToGoogleDoc',
 description: 'Appends text to the very end of a specific Google Document or tab.',
 parameters: DocumentIdParameter.extend({
@@ -860,11 +935,15 @@ parameters: z.object({
   findText: z.string().min(1).describe('The text to find.'),
   replaceText: z.string().describe('The replacement text.'),
   matchCase: z.boolean().optional().default(true).describe('Whether the search should be case-sensitive.'),
+  tabId: z.string().min(1).optional().describe('Limit replacement to this tab. Omit to replace across the whole document.'),
 }),
 execute: async (args, { log }) => {
   const docs = await getDocsClient();
-  log.info(`Replacing all "${args.findText}" with "${args.replaceText}" in doc ${args.documentId}`);
+  log.info(`Replacing all "${args.findText}" with "${args.replaceText}" in doc ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
   try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
     const request: docs_v1.Schema$Request = {
       replaceAllText: {
         containsText: {
@@ -872,6 +951,7 @@ execute: async (args, { log }) => {
           matchCase: args.matchCase,
         },
         replaceText: args.replaceText,
+        ...(args.tabId ? { tabsCriteria: { tabIds: [args.tabId] } } : {}),
       },
     };
     const result = await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
