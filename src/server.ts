@@ -18,6 +18,7 @@ ParagraphStyleArgs,
 ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
 ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
 NotImplementedError,
+MarkdownConversionError,
 // Gmail types
 MessageIdParameter,
 ThreadIdParameter,
@@ -49,6 +50,7 @@ import * as LabelManager from './gmailLabelManager.js';
 import * as FilterManager from './gmailFilterManager.js';
 import * as McpTransport from './mcpTransport.js';
 import { parseEnabledToolGroups, type ToolGroup } from './toolGroups.js';
+import { insertMarkdown, formatInsertResult } from './markdown-transformer/index.js';
 
 let authClient: OAuth2Client | null = null;
 let googleDocs: docs_v1.Docs | null = null;
@@ -538,6 +540,283 @@ log.info(`Appending to Google Doc: ${args.documentId}${args.tabId ? ` (tab: ${ar
     }
 
 },
+});
+
+server.addTool({
+name: 'replaceDocumentWithMarkdown',
+description: 'Replace a Doc or tab body with markdown.',
+parameters: z.object({
+documentId: z.string().describe('Document ID.'),
+markdown: z.string().min(1).max(500000).describe('Markdown.'),
+preserveTitle: z.boolean().optional().default(false),
+tabId: z.string().optional().describe('Tab ID.'),
+firstHeadingAsTitle: z.boolean().optional().default(true),
+}),
+execute: async (args, { log }) => {
+const docs = await getDocsClient();
+log.info(`Replacing doc ${args.documentId} with markdown (${args.markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
+
+try {
+    const doc = await docs.documents.get({
+        documentId: args.documentId,
+        suggestionsViewMode: GDocsHelpers.SUGGESTIONS_VIEW_MODE,
+        fields: GDocsHelpers.buildDocumentGetFields(
+            'body(content(startIndex,endIndex,paragraph))',
+            args.tabId
+        ),
+    });
+
+    let startIndex = 1;
+    let bodyContent: any;
+
+    if (args.tabId) {
+        const targetTab = GDocsHelpers.findTabById(doc.data, args.tabId);
+        if (!targetTab) {
+            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+        }
+        if (!targetTab.documentTab) {
+            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+        }
+        bodyContent = targetTab.documentTab.body?.content;
+    } else {
+        bodyContent = doc.data.body?.content;
+    }
+
+    if (!bodyContent) {
+        throw new UserError('No content found in document/tab');
+    }
+
+    let endIndex = bodyContent[bodyContent.length - 1].endIndex! - 1;
+
+    if (args.preserveTitle) {
+        for (const element of bodyContent) {
+            if (element.paragraph && element.endIndex) {
+                startIndex = element.endIndex;
+                break;
+            }
+        }
+    }
+
+    if (endIndex > startIndex) {
+        const deleteRange: any = { startIndex, endIndex };
+        if (args.tabId) {
+            deleteRange.tabId = args.tabId;
+        }
+        log.info(`Deleting content from index ${startIndex} to ${endIndex}`);
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+            { deleteContentRange: { range: deleteRange } },
+        ]);
+
+        const docAfterDelete = await docs.documents.get({
+            documentId: args.documentId,
+            suggestionsViewMode: GDocsHelpers.SUGGESTIONS_VIEW_MODE,
+            fields: args.tabId ? GDocsHelpers.TAB_BODY_RANGE_FIELDS : 'body(content(startIndex,endIndex))',
+        });
+
+        let survivorContent: any;
+        if (args.tabId) {
+            const tab = GDocsHelpers.findTabById(docAfterDelete.data, args.tabId);
+            survivorContent = tab?.documentTab?.body?.content;
+        } else {
+            survivorContent = docAfterDelete.data.body?.content;
+        }
+        const survivorEnd = survivorContent
+            ? survivorContent[survivorContent.length - 1].endIndex!
+            : startIndex + 1;
+
+        const survivorRange: any = { startIndex, endIndex: survivorEnd };
+        if (args.tabId) {
+            survivorRange.tabId = args.tabId;
+        }
+
+        const cleanupRequests: any[] = [
+            { deleteParagraphBullets: { range: survivorRange } },
+            {
+                updateTextStyle: {
+                    range: survivorRange,
+                    textStyle: {
+                        underline: false,
+                        bold: false,
+                        italic: false,
+                        strikethrough: false,
+                        foregroundColor: {},
+                        backgroundColor: {},
+                    },
+                    fields: 'underline,bold,italic,strikethrough,foregroundColor,backgroundColor',
+                },
+            },
+        ];
+
+        try {
+            await GDocsHelpers.executeBatchUpdate(docs, args.documentId, cleanupRequests);
+            log.info(`Cleaned surviving paragraph (bullets + text style) at range ${startIndex}-${survivorEnd}`);
+        } catch (e: any) {
+            log.info(`Survivor cleanup skipped: ${e.message}`);
+        }
+    }
+
+    const result = await insertMarkdown(docs, args.documentId, args.markdown, {
+        startIndex,
+        tabId: args.tabId,
+        firstHeadingAsTitle: args.firstHeadingAsTitle ?? true,
+    });
+
+    const debugSummary = formatInsertResult(result);
+    log.info(debugSummary);
+    return `Successfully replaced document content with ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
+} catch (error: any) {
+    log.error(`Error replacing document with markdown: ${error.message}`);
+    if (error instanceof UserError) throw error;
+    if (error instanceof MarkdownConversionError) {
+        throw new UserError(error.message);
+    }
+    throw new UserError(`Failed to apply markdown: ${error.message || 'Unknown error'}`);
+}
+}
+});
+
+server.addTool({
+name: 'appendMarkdownToGoogleDoc',
+description: 'Append markdown to a Doc or tab.',
+parameters: z.object({
+documentId: z.string().describe('Document ID.'),
+markdown: z.string().min(1).max(500000).describe('Markdown.'),
+addNewlineIfNeeded: z.boolean().optional().default(true),
+tabId: z.string().optional().describe('Tab ID.'),
+firstHeadingAsTitle: z.boolean().optional().default(false),
+}),
+execute: async (args, { log }) => {
+const docs = await getDocsClient();
+log.info(`Appending markdown to doc ${args.documentId} (${args.markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
+
+try {
+    const doc = await docs.documents.get({
+        documentId: args.documentId,
+        suggestionsViewMode: GDocsHelpers.SUGGESTIONS_VIEW_MODE,
+        fields: args.tabId ? GDocsHelpers.TAB_BODY_END_INDEX_FIELDS : 'body(content(endIndex))',
+    });
+
+    let bodyContent: any;
+
+    if (args.tabId) {
+        const targetTab = GDocsHelpers.findTabById(doc.data, args.tabId);
+        if (!targetTab) {
+            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+        }
+        if (!targetTab.documentTab) {
+            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+        }
+        bodyContent = targetTab.documentTab.body?.content;
+    } else {
+        bodyContent = doc.data.body?.content;
+    }
+
+    if (!bodyContent) {
+        throw new UserError('No content found in document/tab');
+    }
+
+    let startIndex = bodyContent[bodyContent.length - 1].endIndex! - 1;
+    log.info(`Document end index: ${startIndex}`);
+
+    if (args.addNewlineIfNeeded && startIndex > 1) {
+        const location: any = { index: startIndex };
+        if (args.tabId) {
+            location.tabId = args.tabId;
+        }
+        await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+            { insertText: { location, text: '\n\n' } },
+        ]);
+        startIndex += 2;
+        log.info(`Added spacing, new start index: ${startIndex}`);
+    }
+
+    const result = await insertMarkdown(docs, args.documentId, args.markdown, {
+        startIndex,
+        tabId: args.tabId,
+        firstHeadingAsTitle: args.firstHeadingAsTitle,
+    });
+
+    const debugSummary = formatInsertResult(result);
+    log.info(debugSummary);
+    return `Successfully appended ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
+} catch (error: any) {
+    log.error(`Error appending markdown: ${error.message}`);
+    if (error instanceof UserError) throw error;
+    if (error instanceof MarkdownConversionError) {
+        throw new UserError(error.message);
+    }
+    throw new UserError(`Failed to append markdown: ${error.message}`);
+}
+}
+});
+
+server.addTool({
+name: 'replaceRangeWithMarkdown',
+description: 'Replace a Doc or tab range with markdown.',
+parameters: z.object({
+documentId: z.string().describe('Document ID.'),
+startIndex: z.number().int().min(1).describe('Start index.'),
+endIndex: z.number().int().min(1).describe('End index.'),
+markdown: z.string().min(1).max(500000).describe('Markdown.'),
+tabId: z.string().optional().describe('Tab ID.'),
+}).refine((data) => data.endIndex > data.startIndex, {
+message: 'endIndex must be greater than startIndex',
+path: ['endIndex'],
+}),
+execute: async (args, { log }) => {
+const docs = await getDocsClient();
+log.info(`Replacing range ${args.startIndex}-${args.endIndex} in doc ${args.documentId} with markdown (${args.markdown.length} chars)${args.tabId ? ` in tab ${args.tabId}` : ''}`);
+
+try {
+    if (args.endIndex <= args.startIndex) {
+        throw new UserError('endIndex must be greater than startIndex');
+    }
+
+    if (args.tabId) {
+        const doc = await docs.documents.get({
+            documentId: args.documentId,
+            suggestionsViewMode: GDocsHelpers.SUGGESTIONS_VIEW_MODE,
+            fields: GDocsHelpers.TAB_VERIFY_FIELDS,
+        });
+        const targetTab = GDocsHelpers.findTabById(doc.data, args.tabId);
+        if (!targetTab) {
+            throw new UserError(`Tab with ID "${args.tabId}" not found in document.`);
+        }
+        if (!targetTab.documentTab) {
+            throw new UserError(`Tab "${args.tabId}" does not have content (may not be a document tab).`);
+        }
+    }
+
+    const deleteRange: any = {
+        startIndex: args.startIndex,
+        endIndex: args.endIndex,
+    };
+    if (args.tabId) {
+        deleteRange.tabId = args.tabId;
+    }
+
+    log.info(`Deleting content from index ${args.startIndex} to ${args.endIndex}`);
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [
+        { deleteContentRange: { range: deleteRange } },
+    ]);
+
+    const result = await insertMarkdown(docs, args.documentId, args.markdown, {
+        startIndex: args.startIndex,
+        tabId: args.tabId,
+    });
+
+    const debugSummary = formatInsertResult(result);
+    log.info(debugSummary);
+    return `Successfully replaced range ${args.startIndex}-${args.endIndex} with ${args.markdown.length} characters of markdown.\n\n${debugSummary}`;
+} catch (error: any) {
+    log.error(`Error replacing range with markdown: ${error.message}`);
+    if (error instanceof UserError) throw error;
+    if (error instanceof MarkdownConversionError) {
+        throw new UserError(error.message);
+    }
+    throw new UserError(`Failed to replace range with markdown: ${error.message || 'Unknown error'}`);
+}
+}
 });
 
 server.addTool({

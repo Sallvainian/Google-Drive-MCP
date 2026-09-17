@@ -16,6 +16,9 @@ const ADD_TOOL_NAMES = [
   'readGoogleDoc',
   'listDocumentTabs',
   'appendToGoogleDoc',
+  'replaceDocumentWithMarkdown',
+  'appendMarkdownToGoogleDoc',
+  'replaceRangeWithMarkdown',
   'insertText',
   'replaceAllText',
   'deleteRange',
@@ -144,10 +147,16 @@ function addToolNames(source) {
 }
 
 describe('tools/list registration order', () => {
-  it('lists 108 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
+  it('lists 111 unique addTool names in file order, first readGoogleDoc last send_draft', () => {
     const source = readFileSync(join(srcDir, 'server.ts'), 'utf8');
     const names = addToolNames(source);
     assert.deepStrictEqual(names, ADD_TOOL_NAMES);
+    assert.strictEqual(names.length, 111);
+    assert.ok(names.includes('replaceDocumentWithMarkdown'));
+    assert.ok(names.includes('appendMarkdownToGoogleDoc'));
+    assert.ok(names.includes('replaceRangeWithMarkdown'));
+    assert.equal(names.includes('appendMarkdown'), false);
+    assert.equal(names.includes('findAndReplace'), false);
   });
 
   it('does not put ttlMs or cacheScope in src/', () => {
