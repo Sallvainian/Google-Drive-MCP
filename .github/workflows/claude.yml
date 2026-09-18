@@ -74,16 +74,13 @@ jobs:
 
             Dependencies are installed already. Run what your change touches:
 
-            - `npm run build` — `tsc`. Run this FIRST: the tests import from
-              `dist/`, which is gitignored, so an unbuilt tree has nothing to test
-              against.
-            - `node --test tests/*.test.js` — the unit suite, 45 tests.
-
-            Do NOT run `npm test` unless you have checked what the script is.
-            Per AGENTS.md it was `node --test tests/`, which Node 24 resolves as a
-            module and fails with MODULE_NOT_FOUND before running anything; the
-            fix to `tests/*.test.js` is in flight. Invoke the test files directly
-            and you are correct either way.
+            - `npm run build` — `tsc`. Run this FIRST if you invoke `node --test`
+              directly: the tests import from `dist/`, which is gitignored, so an
+              unbuilt tree has nothing to test against.
+            - `npm test` — pretest `tsc` then `node --test tests/*.test.js`
+              (`package.json`). Do not invoke `node --test tests/` (the
+              directory): Node 24 resolves that as a module and fails with
+              MODULE_NOT_FOUND.
 
             There is no linter and no `lint` script, by design. Do not add one and
             do not reformat a file you are editing — `src/server.ts` indentation is
