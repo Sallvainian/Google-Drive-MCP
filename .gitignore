@@ -45,13 +45,10 @@ export-docs.mjs
 .cursor/
 .codex/
 
-# BMad workspace output
+# BMad workspace output. Loop copies `_bmad-output/` into worktrees via
+# scm.worktree_seed; it is not committed.
 _bmad/
-# _bmad-output/ is local except specs/: bmad-loop mounts a fresh worktree for a
-# story re-drive and the re-driven session reads the COMMITTED spec, so an
-# uncommitted correction never reaches it.
-_bmad-output/*
-!_bmad-output/specs/
+_bmad-output/
 
 # Archived doc scan-report snapshots
 docs/.archive/

@@ -13,10 +13,9 @@ in `docs/` — they are regenerated wholesale, not hand-edited.
 - Never commit `credentials.json` or `token.json` — OAuth secrets, gitignored at `.gitignore:6-7`.
 - `.claude/skills/` is gitignored (vendor BMAD install). `.claude/` config, hooks,
   and personalities stay tracked. `.grok/`, `.codex/`, `.cursor/` and `_bmad/` stay
-  ignored. `_bmad-output/` is
-  ignored. `_bmad-output/specs/` is un-ignored so a bmad-loop story re-drive can read its
-  COMMITTED spec from a fresh worktree, but those specs are NOT published: they index
-  unfixed findings by file and line, and this repo is public. Keep them local.
+  ignored. `_bmad-output/` is gitignored in full; bmad-loop copies it into
+  worktrees via `scm.worktree_seed`. Keep it local: specs index unfixed
+  findings by file and line, and this repo is public.
 
 ## Where things are
 
