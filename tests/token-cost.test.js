@@ -40,13 +40,13 @@ function runChecker(report) {
 }
 
 describe('token-budget.json', () => {
-  it('publishes surfaces.full as 111 / 20265 / 183 with thresholds 1000 / 500 / 10', () => {
+  it('publishes surfaces.full as 127 / 23698 / 187 with thresholds 1000 / 500 / 10', () => {
     const budget = JSON.parse(readFileSync(budgetPath, 'utf8'));
     assert.deepStrictEqual(Object.keys(budget.surfaces), ['full']);
     assert.deepStrictEqual(budget.surfaces.full, {
-      tools: 111,
-      total_tokens: 20265,
-      average: 183,
+      tools: 127,
+      total_tokens: 23698,
+      average: 187,
     });
     assert.deepStrictEqual(budget.thresholds, {
       per_tool: 1000,
@@ -102,26 +102,26 @@ describe('check-token-budget.js', () => {
     assert.equal(result.status, 0, result.stderr);
   });
 
-  it('exits non-zero when full total is 22292', () => {
+  it('exits non-zero when full total is 26068', () => {
     const names = archiveNames();
     const report = reportFromNames(names, (_name, index) => {
-      if (index < 22) return 1000;
-      if (index === 22) return 292;
+      if (index < 26) return 1000;
+      if (index === 26) return 68;
       return 0;
     });
-    assert.equal(report.total, 22292);
+    assert.equal(report.total, 26068);
     const result = runChecker(report);
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /full total 22292 exceeds 22291 \(20265 \+ 10%\)/);
+    assert.match(result.stderr, /full total 26068 exceeds 26067 \(23698 \+ 10%\)/);
   });
 
-  it('exits 0 when full total is 22291', () => {
+  it('exits 0 when full total is 26067', () => {
     const names = archiveNames();
     const result = runChecker(
       reportFromNames(names, (name, index) => {
         void name;
-        if (index < 22) return 1000;
-        if (index === 22) return 291;
+        if (index < 26) return 1000;
+        if (index === 26) return 67;
         return 0;
       })
     );

@@ -16,7 +16,11 @@ TextStyleArgs,
 ParagraphStyleParameters,
 ParagraphStyleArgs,
 ApplyTextStyleToolParameters, ApplyTextStyleToolArgs,
+BatchApplyTextStyleToolParameters, BatchApplyTextStyleToolArgs,
+CompactTextStyleParameters,
 ApplyParagraphStyleToolParameters, ApplyParagraphStyleToolArgs,
+validateHexColor,
+hexToRgbColor,
 NotImplementedError,
 MarkdownConversionError,
 // Gmail types
@@ -1056,6 +1060,171 @@ let { startIndex, endIndex } = args.target as any; // Will be updated if target 
 });
 
 server.addTool({
+name: 'modifyText',
+description: 'Insert, replace, and/or format text in one operation. Target by range, found text, or insertion index.',
+parameters: DocumentIdParameter.extend({
+  target: z.union([
+    z.object({
+      startIndex: z.number().int().min(1),
+      endIndex: z.number().int().min(1),
+    }).refine((d) => d.endIndex > d.startIndex, { message: 'endIndex must be greater than startIndex', path: ['endIndex'] }),
+    z.object({
+      textToFind: z.string().min(1),
+      matchInstance: z.number().int().min(1).optional().default(1),
+    }),
+    z.object({
+      insertionIndex: z.number().int().min(1),
+    }),
+  ]),
+  text: z.string().optional(),
+  style: CompactTextStyleParameters.optional(),
+  tabId: z.string().min(1).optional(),
+})
+  .refine((args) => args.text !== undefined || args.style !== undefined, {
+    message: 'At least one of text or style must be provided.',
+  })
+  .refine(
+    (args) => {
+      if ('insertionIndex' in args.target && args.text === undefined) return false;
+      return true;
+    },
+    { message: 'text is required when using insertionIndex target (no existing range to format).' }
+  ),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`modifyText on doc ${args.documentId}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    let startIndex: number;
+    let endIndex: number | undefined;
+    if ('insertionIndex' in args.target) {
+      startIndex = args.target.insertionIndex;
+      endIndex = undefined;
+    } else if ('textToFind' in args.target) {
+      const range = await GDocsHelpers.findTextRange(
+        docs,
+        args.documentId,
+        args.target.textToFind,
+        args.target.matchInstance,
+        args.tabId
+      );
+      if (!range) {
+        throw new UserError(
+          `Could not find instance ${args.target.matchInstance ?? 1} of text "${args.target.textToFind}"${args.tabId ? ` in tab ${args.tabId}` : ''}.`
+        );
+      }
+      startIndex = range.startIndex;
+      endIndex = range.endIndex;
+    } else {
+      startIndex = (args.target as { startIndex: number; endIndex: number }).startIndex;
+      endIndex = (args.target as { startIndex: number; endIndex: number }).endIndex;
+    }
+    if (startIndex < 1) startIndex = 1;
+    const requests = GDocsHelpers.buildModifyTextRequests({
+      startIndex,
+      endIndex,
+      text: args.text,
+      style: args.style,
+      tabId: args.tabId,
+    });
+    if (requests.length === 0) {
+      return 'No operations to perform.';
+    }
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+    const actions: string[] = [];
+    if (endIndex !== undefined && args.text !== undefined) actions.push('replaced text');
+    else if (args.text !== undefined) actions.push('inserted text');
+    if (args.style) actions.push('applied formatting');
+    return `Successfully ${actions.join(' and ')} at range ${startIndex}-${endIndex ?? startIndex + (args.text?.length ?? 0)}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error in modifyText for doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to modify text: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'batchApplyTextStyle',
+description: 'Applies text style to many ranges in one call. Unresolved textToFind targets are skipped.',
+parameters: BatchApplyTextStyleToolParameters,
+execute: async (args: BatchApplyTextStyleToolArgs, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Batch-applying text style in doc ${args.documentId}. Operations: ${args.operations.length}`);
+  if (args.tabId) {
+    await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+  }
+  const requests: docs_v1.Schema$Request[] = [];
+  const skipped: { index: number; reason: string }[] = [];
+  const fieldsSeen = new Set<string>();
+  for (let i = 0; i < args.operations.length; i++) {
+    const op = args.operations[i];
+    let startIndex: number | undefined;
+    let endIndex: number | undefined;
+    try {
+      if ('textToFind' in op.target) {
+        const range = await GDocsHelpers.findTextRange(
+          docs,
+          args.documentId,
+          op.target.textToFind,
+          op.target.matchInstance,
+          args.tabId
+        );
+        if (!range) {
+          skipped.push({
+            index: i,
+            reason: `Could not find instance ${op.target.matchInstance} of text "${op.target.textToFind}".`,
+          });
+          continue;
+        }
+        startIndex = range.startIndex;
+        endIndex = range.endIndex;
+      } else {
+        startIndex = op.target.startIndex;
+        endIndex = op.target.endIndex;
+      }
+      if (startIndex === undefined || endIndex === undefined || endIndex <= startIndex) {
+        skipped.push({ index: i, reason: 'Target range could not be determined.' });
+        continue;
+      }
+      const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(
+        startIndex,
+        endIndex,
+        op.style,
+        args.tabId
+      );
+      if (!requestInfo) {
+        skipped.push({ index: i, reason: 'No valid text styling options were provided.' });
+        continue;
+      }
+      requests.push(requestInfo.request);
+      requestInfo.fields.forEach((f) => fieldsSeen.add(f));
+    } catch (error: any) {
+      skipped.push({ index: i, reason: error.message || 'Unknown error resolving target.' });
+    }
+  }
+  if (requests.length === 0) {
+    throw new UserError(`No operations could be applied. Skipped: ${JSON.stringify(skipped)}`);
+  }
+  try {
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+  } catch (error: any) {
+    throw new UserError(`Failed to batch apply text style: ${error.message || error}`);
+  }
+  const apiCalls = Math.ceil(requests.length / 50);
+  const summary =
+    `Applied ${requests.length}/${args.operations.length} text style operation(s) ` +
+    `(${Array.from(fieldsSeen).join(', ')}) to doc ${args.documentId} in ${apiCalls} Docs API call(s).`;
+  if (skipped.length > 0) {
+    return `${summary} Skipped ${skipped.length}: ${JSON.stringify(skipped)}`;
+  }
+  return summary;
+}
+});
+
+server.addTool({
 name: 'applyParagraphStyle',
 description: 'Applies paragraph-level formatting (alignment, spacing, named styles like Heading 1) to the paragraph(s) containing specific text, an index, or a range.',
 parameters: ApplyParagraphStyleToolParameters,
@@ -1183,6 +1352,651 @@ log.error(`Error inserting table in doc ${args.documentId}: ${error.message || e
 if (error instanceof UserError) throw error;
 throw new UserError(`Failed to insert table: ${error.message || 'Unknown error'}`);
 }
+}
+});
+
+server.addTool({
+name: 'insertTableWithData',
+description: 'Inserts a table pre-populated with a 2D string array. Optionally bolds the first row as a header.',
+parameters: DocumentIdParameter.extend({
+  data: z.array(z.array(z.string()).max(50)).min(1).max(200),
+  index: z.number().int().min(1),
+  hasHeaderRow: z.boolean().optional().default(false),
+  tabId: z.string().min(1).optional(),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  const numRows = args.data.length;
+  const numCols = args.data.reduce((max, row) => Math.max(max, row.length), 0);
+  log.info(`Inserting ${numRows}x${numCols} table with data in doc ${args.documentId} at index ${args.index}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const requests = GDocsHelpers.buildInsertTableWithDataRequests(
+      args.data,
+      args.index,
+      args.hasHeaderRow ?? false,
+      args.tabId
+    );
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+    return (
+      `Successfully inserted a ${numRows}x${numCols} table with data at index ${args.index}` +
+      `${args.tabId ? ` in tab ${args.tabId}` : ''}. ` +
+      `${args.hasHeaderRow ? 'Header row bolded. ' : ''}`
+    );
+  } catch (error: any) {
+    log.error(`Error inserting table with data in doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert table with data: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'listDocumentTables',
+description: 'Lists tables with stable IDs (table:body:N or table:<tabId>:N), ranges, and dimensions.',
+parameters: DocumentIdParameter.extend({
+  tabId: z.string().min(1).optional(),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Listing document tables for ${args.documentId}${args.tabId ? ` (tab: ${args.tabId})` : ''}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_CONTENT_BASIC_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_CONTENT_BASIC_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const tables = GDocsHelpers.extractDocumentTables(doc, args.tabId).map((table) => ({
+      tableId: table.tableId,
+      startIndex: table.startIndex,
+      endIndex: table.endIndex,
+      rowCount: table.rowCount,
+      columnCount: table.columnCount,
+    }));
+    return JSON.stringify({ tables }, null, 2);
+  } catch (error: any) {
+    log.error(`Error listing tables for doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    if (error.code === 404) throw new UserError(`Document not found (ID: ${args.documentId}).`);
+    if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
+    throw new UserError(`Failed to list document tables: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'cloneTable',
+description: 'Clones a source Docs table into a target document, copying text and optional styles.',
+parameters: DocumentIdParameter.extend({
+  sourceDocumentId: z.string().min(1),
+  sourceTableId: z.string().min(1),
+  index: z.number().int().min(1),
+  sourceTabId: z.string().min(1).optional(),
+  targetTabId: z.string().min(1).optional(),
+  copyColumnWidths: z.boolean().optional().default(true),
+  copyRowStyles: z.boolean().optional().default(true),
+  copyCellStyles: z.boolean().optional().default(true),
+  copyPinnedHeaderRows: z.boolean().optional().default(true),
+  copyHeaderBold: z.boolean().optional().default(true),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  const copyColumnWidths = args.copyColumnWidths ?? true;
+  const copyRowStyles = args.copyRowStyles ?? true;
+  const copyCellStyles = args.copyCellStyles ?? true;
+  const copyPinnedHeaderRows = args.copyPinnedHeaderRows ?? true;
+  const copyHeaderBold = args.copyHeaderBold ?? true;
+  log.info(`Cloning table ${args.sourceTableId} from ${args.sourceDocumentId} into ${args.documentId} at index ${args.index}`);
+  try {
+    let sourceDoc: docs_v1.Schema$Document;
+    if (args.sourceTabId) {
+      const sourceTab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.sourceDocumentId,
+        args.sourceTabId,
+        `documentTab(${GDocsHelpers.CLONE_TABLE_SOURCE_BODY_FIELDS})`
+      );
+      sourceDoc = { tabs: [sourceTab] };
+    } else {
+      const sourceRes = await docs.documents.get({
+        documentId: args.sourceDocumentId,
+        fields: GDocsHelpers.CLONE_TABLE_SOURCE_BODY_FIELDS,
+      });
+      sourceDoc = sourceRes.data;
+    }
+    const snapshot = GDocsHelpers.extractTableSnapshot(sourceDoc, args.sourceTableId, args.sourceTabId);
+    if (!snapshot) {
+      throw new UserError(
+        `Source table "${args.sourceTableId}" was not found in source document ${args.sourceDocumentId}.`
+      );
+    }
+    if (snapshot.rowCount === 0 || snapshot.columnCount === 0) {
+      throw new UserError(`Source table "${args.sourceTableId}" is empty and cannot be cloned.`);
+    }
+    if (args.targetTabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.targetTabId);
+    }
+    const insertRequests = GDocsHelpers.buildInsertTableWithDataRequests(
+      snapshot.data,
+      args.index,
+      false,
+      args.targetTabId
+    );
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, insertRequests);
+
+    let targetDoc: docs_v1.Schema$Document;
+    if (args.targetTabId) {
+      const targetTab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.targetTabId,
+        `documentTab(${GDocsHelpers.CLONE_TABLE_TARGET_BODY_FIELDS})`
+      );
+      targetDoc = { tabs: [targetTab] };
+    } else {
+      const targetRes = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.CLONE_TABLE_TARGET_BODY_FIELDS,
+      });
+      targetDoc = targetRes.data;
+    }
+    const targetTable = GDocsHelpers.extractDocumentTables(targetDoc, args.targetTabId)
+      .filter(
+        (table) =>
+          table.startIndex != null &&
+          table.startIndex >= args.index &&
+          table.rowCount === snapshot.rowCount &&
+          table.columnCount === snapshot.columnCount
+      )
+      .sort(
+        (a, b) =>
+          (a.startIndex ?? Number.MAX_SAFE_INTEGER) - (b.startIndex ?? Number.MAX_SAFE_INTEGER)
+      )[0];
+    if (!targetTable || targetTable.startIndex == null) {
+      throw new UserError(
+        'Cloned target table was inserted, but could not be re-located safely for style copying.'
+      );
+    }
+    const styleRequests: docs_v1.Schema$Request[] = [];
+    if (copyColumnWidths) {
+      for (const columnStyle of snapshot.columnStyles) {
+        if (columnStyle.widthType !== 'FIXED_WIDTH' || !columnStyle.widthPt) continue;
+        styleRequests.push(
+          GDocsHelpers.buildTableColumnWidthRequest(
+            targetTable.startIndex,
+            [columnStyle.columnIndex],
+            columnStyle.widthPt,
+            args.targetTabId
+          )
+        );
+      }
+    }
+    if (copyRowStyles) {
+      for (const rowStyle of snapshot.rowStyles) {
+        const request = GDocsHelpers.buildTableRowStyleRequest(
+          targetTable.startIndex,
+          [rowStyle.rowIndex],
+          rowStyle.minRowHeightPt,
+          rowStyle.preventOverflow,
+          args.targetTabId
+        );
+        if (request) styleRequests.push(request);
+      }
+    }
+    if (copyPinnedHeaderRows && snapshot.pinnedHeaderRowsCount > 0) {
+      styleRequests.push(
+        GDocsHelpers.buildPinTableHeaderRowsRequest(
+          targetTable.startIndex,
+          snapshot.pinnedHeaderRowsCount,
+          args.targetTabId
+        )
+      );
+    }
+    if (copyCellStyles) {
+      for (const cellStyle of snapshot.cellStyles) {
+        const requestInfo = GDocsHelpers.buildTableCellStyleRequest(
+          targetTable.startIndex,
+          cellStyle.rowIndex,
+          cellStyle.columnIndex,
+          {
+            backgroundColor: cellStyle.backgroundColor,
+            contentAlignment: cellStyle.contentAlignment ?? undefined,
+            paddingTopPt: cellStyle.paddingTopPt,
+            paddingBottomPt: cellStyle.paddingBottomPt,
+            paddingLeftPt: cellStyle.paddingLeftPt,
+            paddingRightPt: cellStyle.paddingRightPt,
+            borderTop: cellStyle.borderTop,
+            borderBottom: cellStyle.borderBottom,
+            borderLeft: cellStyle.borderLeft,
+            borderRight: cellStyle.borderRight,
+          },
+          args.targetTabId
+        );
+        if (requestInfo) styleRequests.push(requestInfo.request);
+      }
+    }
+    if (copyHeaderBold) {
+      for (const cellStyle of snapshot.cellStyles) {
+        if (!cellStyle.hasBoldText) continue;
+        const targetCell = targetTable.cells.find(
+          (cell) =>
+            cell.rowIndex === cellStyle.rowIndex && cell.columnIndex === cellStyle.columnIndex
+        );
+        if (!targetCell?.contentStartIndex) continue;
+        const targetText = snapshot.data[cellStyle.rowIndex]?.[cellStyle.columnIndex] ?? '';
+        if (!targetText) continue;
+        const requestInfo = GDocsHelpers.buildUpdateTextStyleRequest(
+          targetCell.contentStartIndex,
+          targetCell.contentStartIndex + targetText.length,
+          { bold: true },
+          args.targetTabId
+        );
+        if (requestInfo) styleRequests.push(requestInfo.request);
+      }
+    }
+    if (styleRequests.length > 0) {
+      await GDocsHelpers.executeBatchUpdate(docs, args.documentId, styleRequests);
+    }
+    return `Successfully cloned ${args.sourceTableId} into ${args.documentId} at index ${args.index}.`;
+  } catch (error: any) {
+    log.error(`Error cloning table ${args.sourceTableId} from ${args.sourceDocumentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to clone table: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'replaceTableRowData',
+description: 'Replaces the plain-text contents of one row in an existing Docs table.',
+parameters: DocumentIdParameter.extend({
+  tableId: z.string().min(1),
+  rowIndex: z.number().int().min(0),
+  values: z.array(z.string()).max(50),
+  tabId: z.string().min(1).optional(),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Replacing row ${args.rowIndex} in ${args.tableId} for doc ${args.documentId}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_CONTENT_INDEXED_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_CONTENT_INDEXED_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const table = GDocsHelpers.getTableById(doc, args.tableId, args.tabId);
+    if (!table) {
+      throw new UserError(`Table "${args.tableId}" not found in document.`);
+    }
+    await GDocsHelpers.replaceTableRowData(
+      docs,
+      args.documentId,
+      table,
+      args.rowIndex,
+      args.values,
+      args.tabId
+    );
+    return `Successfully replaced row ${args.rowIndex} in table ${args.tableId}.`;
+  } catch (error: any) {
+    log.error(`Error replacing row ${args.rowIndex} in ${args.tableId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    if (error.code === 404) throw new UserError(`Document not found (ID: ${args.documentId}).`);
+    if (error.code === 403) throw new UserError(`Permission denied for document (ID: ${args.documentId}).`);
+    throw new UserError(`Failed to replace table row data: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateTableBorders',
+description: 'Applies top/bottom/left/right border styles to a Docs table cell range.',
+parameters: DocumentIdParameter.extend({
+  tableId: z.string().min(1),
+  rowStart: z.number().int().min(0),
+  rowEnd: z.number().int().min(0),
+  columnStart: z.number().int().min(0),
+  columnEnd: z.number().int().min(0),
+  top: z.object({
+    color: z.string().refine(validateHexColor).optional(),
+    widthPt: z.number().min(0).optional(),
+    dashStyle: z.enum(['SOLID', 'DASHED', 'DOTTED']).optional(),
+  }).optional(),
+  bottom: z.object({
+    color: z.string().refine(validateHexColor).optional(),
+    widthPt: z.number().min(0).optional(),
+    dashStyle: z.enum(['SOLID', 'DASHED', 'DOTTED']).optional(),
+  }).optional(),
+  left: z.object({
+    color: z.string().refine(validateHexColor).optional(),
+    widthPt: z.number().min(0).optional(),
+    dashStyle: z.enum(['SOLID', 'DASHED', 'DOTTED']).optional(),
+  }).optional(),
+  right: z.object({
+    color: z.string().refine(validateHexColor).optional(),
+    widthPt: z.number().min(0).optional(),
+    dashStyle: z.enum(['SOLID', 'DASHED', 'DOTTED']).optional(),
+  }).optional(),
+  tabId: z.string().min(1).optional(),
+})
+  .refine((data) => data.rowEnd >= data.rowStart, {
+    message: 'rowEnd must be greater than or equal to rowStart',
+    path: ['rowEnd'],
+  })
+  .refine((data) => data.columnEnd >= data.columnStart, {
+    message: 'columnEnd must be greater than or equal to columnStart',
+    path: ['columnEnd'],
+  }),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Updating table borders in ${args.tableId} for doc ${args.documentId}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_INDEX_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_INDEX_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const table = GDocsHelpers.getTableById(doc, args.tableId, args.tabId);
+    if (!table) throw new UserError(`Table "${args.tableId}" not found in document.`);
+    if (table.startIndex == null) {
+      throw new UserError(`Table "${args.tableId}" does not expose a valid table start index.`);
+    }
+    if (args.rowEnd >= table.rowCount) {
+      throw new UserError(`rowEnd ${args.rowEnd} exceeds table row count ${table.rowCount}.`);
+    }
+    if (args.columnEnd >= table.columnCount) {
+      throw new UserError(`columnEnd ${args.columnEnd} exceeds table column count ${table.columnCount}.`);
+    }
+    const defaultColor = hexToRgbColor('#000000')!;
+    const makeBorder = (side?: { color?: string; widthPt?: number; dashStyle?: 'SOLID' | 'DASHED' | 'DOTTED' }) =>
+      side
+        ? GDocsHelpers.buildTableBorder(
+            hexToRgbColor(side.color ?? '#000000') ?? defaultColor,
+            side.widthPt ?? 1,
+            side.dashStyle ?? 'SOLID'
+          )
+        : undefined;
+    const requestInfo = GDocsHelpers.buildTableCellStyleRequest(
+      table.startIndex,
+      args.rowStart,
+      args.columnStart,
+      {
+        rowSpan: args.rowEnd - args.rowStart + 1,
+        columnSpan: args.columnEnd - args.columnStart + 1,
+        borderTop: makeBorder(args.top),
+        borderBottom: makeBorder(args.bottom),
+        borderLeft: makeBorder(args.left),
+        borderRight: makeBorder(args.right),
+      },
+      args.tabId
+    );
+    if (!requestInfo) {
+      throw new UserError('No border style options were provided.');
+    }
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
+    return `Successfully updated table borders (${requestInfo.fields.join(', ')}) for ${args.tableId}.`;
+  } catch (error: any) {
+    log.error(`Error updating table borders for ${args.tableId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update table borders: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateTableColumnWidth',
+description: 'Sets fixed widths for one or more columns in an existing Docs table.',
+parameters: DocumentIdParameter.extend({
+  tableId: z.string().min(1),
+  columnIndices: z.array(z.number().int().min(0)).min(1),
+  widthPt: z.number().min(1),
+  tabId: z.string().min(1).optional(),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Updating table column widths in ${args.tableId} for doc ${args.documentId}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_INDEX_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_INDEX_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const table = GDocsHelpers.getTableById(doc, args.tableId, args.tabId);
+    if (!table) throw new UserError(`Table "${args.tableId}" not found in document.`);
+    if (table.startIndex == null) {
+      throw new UserError(`Table "${args.tableId}" does not expose a valid table start index.`);
+    }
+    if (args.columnIndices.some((index) => index >= table.columnCount)) {
+      throw new UserError(
+        `One or more column indices exceed table ${args.tableId} column count ${table.columnCount}.`
+      );
+    }
+    const request = GDocsHelpers.buildTableColumnWidthRequest(
+      table.startIndex,
+      args.columnIndices,
+      args.widthPt,
+      args.tabId
+    );
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully updated width for ${args.columnIndices.length} column(s) in ${args.tableId}.`;
+  } catch (error: any) {
+    log.error(`Error updating column widths for ${args.tableId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update table column width: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateTableRowStyle',
+description: 'Applies min row height, overflow, and optional pinned header rows to a Docs table.',
+parameters: DocumentIdParameter.extend({
+  tableId: z.string().min(1),
+  rowIndices: z.array(z.number().int().min(0)).min(1),
+  minRowHeightPt: z.number().min(0).optional(),
+  preventOverflow: z.boolean().optional(),
+  pinnedHeaderRowsCount: z.number().int().min(0).optional(),
+  tabId: z.string().min(1).optional(),
+}).refine(
+  (data) =>
+    data.minRowHeightPt !== undefined ||
+    data.preventOverflow !== undefined ||
+    data.pinnedHeaderRowsCount !== undefined,
+  { message: 'At least one row style option must be provided.' }
+),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Updating table row style in ${args.tableId} for doc ${args.documentId}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_INDEX_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_INDEX_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const table = GDocsHelpers.getTableById(doc, args.tableId, args.tabId);
+    if (!table) throw new UserError(`Table "${args.tableId}" not found in document.`);
+    if (table.startIndex == null) {
+      throw new UserError(`Table "${args.tableId}" does not expose a valid table start index.`);
+    }
+    if (args.rowIndices.some((index) => index >= table.rowCount)) {
+      throw new UserError(
+        `One or more row indices exceed table ${args.tableId} row count ${table.rowCount}.`
+      );
+    }
+    if (args.pinnedHeaderRowsCount !== undefined && args.pinnedHeaderRowsCount > table.rowCount) {
+      throw new UserError(
+        `pinnedHeaderRowsCount ${args.pinnedHeaderRowsCount} exceeds table row count ${table.rowCount}.`
+      );
+    }
+    const requests: docs_v1.Schema$Request[] = [];
+    const styleRequest = GDocsHelpers.buildTableRowStyleRequest(
+      table.startIndex,
+      args.rowIndices,
+      args.minRowHeightPt,
+      args.preventOverflow,
+      args.tabId
+    );
+    if (styleRequest) requests.push(styleRequest);
+    if (args.pinnedHeaderRowsCount !== undefined) {
+      requests.push(
+        GDocsHelpers.buildPinTableHeaderRowsRequest(
+          table.startIndex,
+          args.pinnedHeaderRowsCount,
+          args.tabId
+        )
+      );
+    }
+    if (requests.length === 0) {
+      throw new UserError('No row style requests were generated.');
+    }
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, requests);
+    return `Successfully updated row style for ${args.tableId}.`;
+  } catch (error: any) {
+    log.error(`Error updating table row style for ${args.tableId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update table row style: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateTableCellStyle',
+description: 'Applies cell background, alignment, and padding to a Docs table range.',
+parameters: DocumentIdParameter.extend({
+  tableId: z.string().min(1),
+  rowStart: z.number().int().min(0),
+  rowEnd: z.number().int().min(0),
+  columnStart: z.number().int().min(0),
+  columnEnd: z.number().int().min(0),
+  backgroundColor: z.string().refine(validateHexColor).optional(),
+  contentAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional(),
+  paddingTopPt: z.number().min(0).optional(),
+  paddingBottomPt: z.number().min(0).optional(),
+  paddingLeftPt: z.number().min(0).optional(),
+  paddingRightPt: z.number().min(0).optional(),
+  tabId: z.string().min(1).optional(),
+})
+  .refine((data) => data.rowEnd >= data.rowStart, {
+    message: 'rowEnd must be greater than or equal to rowStart',
+    path: ['rowEnd'],
+  })
+  .refine((data) => data.columnEnd >= data.columnStart, {
+    message: 'columnEnd must be greater than or equal to columnStart',
+    path: ['columnEnd'],
+  }),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Updating table cell style in ${args.tableId} for doc ${args.documentId}`);
+  try {
+    let doc: docs_v1.Schema$Document;
+    if (args.tabId) {
+      const tab = await GDocsHelpers.getDocumentTab(
+        docs,
+        args.documentId,
+        args.tabId,
+        `documentTab(${GDocsHelpers.TABLE_INDEX_BODY_FIELDS})`
+      );
+      doc = { tabs: [tab] };
+    } else {
+      const res = await docs.documents.get({
+        documentId: args.documentId,
+        fields: GDocsHelpers.TABLE_INDEX_BODY_FIELDS,
+      });
+      doc = res.data;
+    }
+    const table = GDocsHelpers.getTableById(doc, args.tableId, args.tabId);
+    if (!table) throw new UserError(`Table "${args.tableId}" not found in document.`);
+    if (table.startIndex == null) {
+      throw new UserError(`Table "${args.tableId}" does not expose a valid table start index.`);
+    }
+    if (args.rowEnd >= table.rowCount) {
+      throw new UserError(`rowEnd ${args.rowEnd} exceeds table row count ${table.rowCount}.`);
+    }
+    if (args.columnEnd >= table.columnCount) {
+      throw new UserError(`columnEnd ${args.columnEnd} exceeds table column count ${table.columnCount}.`);
+    }
+    const requestInfo = GDocsHelpers.buildTableCellStyleRequest(
+      table.startIndex,
+      args.rowStart,
+      args.columnStart,
+      {
+        rowSpan: args.rowEnd - args.rowStart + 1,
+        columnSpan: args.columnEnd - args.columnStart + 1,
+        backgroundColor: args.backgroundColor ? (hexToRgbColor(args.backgroundColor) ?? undefined) : undefined,
+        contentAlignment: args.contentAlignment,
+        paddingTopPt: args.paddingTopPt,
+        paddingBottomPt: args.paddingBottomPt,
+        paddingLeftPt: args.paddingLeftPt,
+        paddingRightPt: args.paddingRightPt,
+      },
+      args.tabId
+    );
+    if (!requestInfo) {
+      throw new UserError('No table cell style options were provided.');
+    }
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [requestInfo.request]);
+    return `Successfully updated table cell style (${requestInfo.fields.join(', ')}) for ${args.tableId}.`;
+  } catch (error: any) {
+    log.error(`Error updating table cell style for ${args.tableId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update table cell style: ${error.message || 'Unknown error'}`);
+  }
 }
 });
 
@@ -1389,6 +2203,88 @@ log.error(`Error inserting page break in doc ${args.documentId}: ${error.message
 if (error instanceof UserError) throw error;
 throw new UserError(`Failed to insert page break: ${error.message || 'Unknown error'}`);
 }
+}
+});
+
+server.addTool({
+name: 'insertSectionBreak',
+description: 'Inserts a NEXT_PAGE or CONTINUOUS section break at a character index.',
+parameters: DocumentIdParameter.extend({
+  index: z.number().int().min(1),
+  sectionType: z.enum(['NEXT_PAGE', 'CONTINUOUS']).default('NEXT_PAGE'),
+  tabId: z.string().min(1).optional(),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Inserting ${args.sectionType} section break in doc ${args.documentId} at index ${args.index}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const request = GDocsHelpers.buildInsertSectionBreakRequest({
+      index: args.index,
+      sectionType: args.sectionType,
+      tabId: args.tabId,
+    });
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully inserted ${args.sectionType} section break at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error inserting section break in doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert section break: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateSectionStyle',
+description: 'Updates section style (orientation, margins, type, page numbering) for a character range.',
+parameters: DocumentIdParameter.extend({
+  startIndex: z.number().int().min(1),
+  endIndex: z.number().int().min(1),
+  flipPageOrientation: z.boolean().optional(),
+  sectionType: z.enum(['SECTION_TYPE_UNSPECIFIED', 'CONTINUOUS', 'NEXT_PAGE']).optional(),
+  marginTop: z.number().nonnegative().optional(),
+  marginBottom: z.number().nonnegative().optional(),
+  marginLeft: z.number().nonnegative().optional(),
+  marginRight: z.number().nonnegative().optional(),
+  pageNumberStart: z.number().int().min(1).optional(),
+  tabId: z.string().min(1).optional(),
+}).refine((data) => data.endIndex > data.startIndex, {
+  message: 'endIndex must be greater than startIndex',
+  path: ['endIndex'],
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Updating section style in doc ${args.documentId} for range ${args.startIndex}-${args.endIndex}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const built = GDocsHelpers.buildUpdateSectionStyleRequest({
+      startIndex: args.startIndex,
+      endIndex: args.endIndex,
+      flipPageOrientation: args.flipPageOrientation,
+      sectionType: args.sectionType,
+      marginTop: args.marginTop,
+      marginBottom: args.marginBottom,
+      marginLeft: args.marginLeft,
+      marginRight: args.marginRight,
+      pageNumberStart: args.pageNumberStart,
+      tabId: args.tabId,
+    });
+    if (!built) {
+      throw new UserError(
+        'No section style options were provided. Set at least one of: flipPageOrientation, sectionType, marginTop, marginBottom, marginLeft, marginRight, pageNumberStart.'
+      );
+    }
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [built.request]);
+    return `Successfully updated section style (${built.fields.join(', ')}) for range ${args.startIndex}-${args.endIndex}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error updating section style in doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update section style: ${error.message || 'Unknown error'}`);
+  }
 }
 });
 
@@ -1909,6 +2805,142 @@ execute: async (args, { log }) => {
 }
 });
 
+currentToolGroup = 'docs-chips';
+
+server.addTool({
+name: 'insertDateChip',
+description: 'Inserts a Google Docs date smart chip at a paragraph index.',
+parameters: DocumentIdParameter.extend({
+  index: z.number().int().min(1).describe('1-based index within an existing paragraph.'),
+  date: z.string().min(1).describe('Date/time parseable by JavaScript Date.'),
+  timeZoneId: z.string().optional().describe('Optional IANA time zone, e.g. "Asia/Tokyo".'),
+  locale: z.string().optional().describe('Optional locale, e.g. "en".'),
+  dateFormat: z.enum([
+    'DATE_FORMAT_UNSPECIFIED',
+    'DATE_FORMAT_MONTH_DAY_ABBREVIATED',
+    'DATE_FORMAT_MONTH_DAY_FULL',
+    'DATE_FORMAT_MONTH_DAY_YEAR_ABBREVIATED',
+    'DATE_FORMAT_ISO8601',
+  ]).optional().describe('How the date portion should be displayed.'),
+  timeFormat: z.enum([
+    'TIME_FORMAT_UNSPECIFIED',
+    'TIME_FORMAT_DISABLED',
+    'TIME_FORMAT_HOUR_MINUTE',
+    'TIME_FORMAT_HOUR_MINUTE_TIMEZONE',
+  ]).optional().describe('How the time portion should be displayed.'),
+  tabId: z.string().min(1).optional().describe('Tab ID. Omit for document.body.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Inserting date chip into ${args.documentId} at index ${args.index}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const parsed = new Date(args.date);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new UserError(`Invalid date/time value: "${args.date}"`);
+    }
+    const location: docs_v1.Schema$Location = { index: args.index };
+    if (args.tabId) location.tabId = args.tabId;
+    const request = {
+      insertDate: {
+        location,
+        dateElementProperties: {
+          timestamp: parsed.toISOString(),
+          timeZoneId: args.timeZoneId,
+          locale: args.locale,
+          dateFormat: args.dateFormat,
+          timeFormat: args.timeFormat,
+        },
+      },
+    } as docs_v1.Schema$Request;
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully inserted a date chip at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error inserting date chip into doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert date chip: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'insertPerson',
+description: 'Inserts a Google Docs person smart chip using an email address.',
+parameters: DocumentIdParameter.extend({
+  index: z.number().int().min(1).describe('1-based index within an existing paragraph.'),
+  email: z.string().email().describe('Email address linked to the person chip.'),
+  name: z.string().optional().describe('Optional display name hint.'),
+  tabId: z.string().min(1).optional().describe('Tab ID. Omit for document.body.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Inserting person chip into ${args.documentId} at index ${args.index}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const location: docs_v1.Schema$Location = { index: args.index };
+    if (args.tabId) location.tabId = args.tabId;
+    const request: docs_v1.Schema$Request = {
+      insertPerson: {
+        location,
+        personProperties: {
+          email: args.email,
+          name: args.name,
+        },
+      },
+    };
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully inserted a person chip at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error inserting person chip into doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert person chip: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'insertRichLink',
+description: 'Inserts a Google Docs rich-link smart chip for a Google resource URI.',
+parameters: DocumentIdParameter.extend({
+  index: z.number().int().min(1).describe('1-based index within an existing paragraph.'),
+  uri: z.string().url().describe('URI of the Google resource.'),
+  mimeType: z.string().optional().describe('Optional MIME type of the linked resource.'),
+  title: z.string().optional().describe('Optional title hint.'),
+  tabId: z.string().min(1).optional().describe('Tab ID. Omit for document.body.'),
+}),
+execute: async (args, { log }) => {
+  const docs = await getDocsClient();
+  log.info(`Inserting rich link into ${args.documentId} at index ${args.index}`);
+  try {
+    if (args.tabId) {
+      await GDocsHelpers.getDocumentTab(docs, args.documentId, args.tabId);
+    }
+    const location: docs_v1.Schema$Location = { index: args.index };
+    if (args.tabId) location.tabId = args.tabId;
+    const request = {
+      insertRichLink: {
+        location,
+        richLinkProperties: {
+          uri: args.uri,
+          mimeType: args.mimeType,
+          title: args.title,
+        },
+      },
+    } as docs_v1.Schema$Request;
+    await GDocsHelpers.executeBatchUpdate(docs, args.documentId, [request]);
+    return `Successfully inserted a rich link at index ${args.index}${args.tabId ? ` in tab ${args.tabId}` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error inserting rich link into doc ${args.documentId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert rich link: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
 // === GOOGLE DRIVE TOOLS ===
 currentToolGroup = 'drive';
 
@@ -2059,6 +3091,160 @@ try {
   }
   throw new UserError(`Failed to search documents: ${error.message || 'Unknown error'}`);
 }
+}
+});
+
+const DRIVE_MIME_TYPE_SHORTCUTS: Record<string, string> = {
+  document: 'application/vnd.google-apps.document',
+  spreadsheet: 'application/vnd.google-apps.spreadsheet',
+  presentation: 'application/vnd.google-apps.presentation',
+  folder: 'application/vnd.google-apps.folder',
+  form: 'application/vnd.google-apps.form',
+  pdf: 'application/pdf',
+  zip: 'application/zip',
+};
+
+server.addTool({
+name: 'listDriveFiles',
+description: 'Lists any Drive file type with optional MIME, folder, ownership, and sort filters.',
+parameters: z.object({
+  maxResults: z.number().int().min(1).max(100).optional().default(20),
+  mimeType: z.string().optional(),
+  folderId: z.string().optional(),
+  orderBy: z.enum(['name', 'modifiedTime', 'createdTime', 'quotaBytesUsed']).optional().default('modifiedTime'),
+  sortDirection: z.enum(['asc', 'desc']).optional().default('desc'),
+  ownedByMe: z.boolean().optional(),
+  sharedWithMe: z.boolean().optional(),
+  modifiedAfter: z.string().optional(),
+}),
+execute: async (args, { log }) => {
+  if (args.ownedByMe && args.sharedWithMe) {
+    throw new UserError('ownedByMe and sharedWithMe cannot both be true.');
+  }
+  const drive = await getDriveClient();
+  log.info(`Listing Drive files. mimeType=${args.mimeType || 'any'}, folder=${args.folderId || 'all'}`);
+  try {
+    const conditions: string[] = ['trashed=false'];
+    if (args.mimeType) {
+      const resolved = DRIVE_MIME_TYPE_SHORTCUTS[args.mimeType] ?? args.mimeType;
+      conditions.push(`mimeType=${DriveHelpers.driveQueryQuoted(resolved)}`);
+    }
+    if (args.folderId) {
+      conditions.push(`${DriveHelpers.driveQueryQuoted(args.folderId)} in parents`);
+    }
+    if (args.ownedByMe) {
+      conditions.push(`'me' in owners`);
+    } else if (args.sharedWithMe) {
+      conditions.push(`sharedWithMe=true`);
+    }
+    if (args.modifiedAfter) {
+      const cutoff = new Date(args.modifiedAfter).toISOString();
+      conditions.push(`modifiedTime > ${DriveHelpers.driveQueryQuoted(cutoff)}`);
+    }
+    const queryString = conditions.join(' and ');
+    const orderByParam = args.sortDirection === 'desc' ? `${args.orderBy} desc` : args.orderBy;
+    const response = await drive.files.list({
+      q: queryString,
+      pageSize: args.maxResults,
+      orderBy: orderByParam,
+      fields: 'files(id,name,mimeType,size,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress))',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const files = (response.data.files || []).map((file) => ({
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size != null ? Number(file.size) : null,
+      modifiedTime: file.modifiedTime,
+      createdTime: file.createdTime,
+      owner: file.owners?.[0]?.displayName || null,
+      url: file.webViewLink,
+    }));
+    return JSON.stringify({ files, total: files.length }, null, 2);
+  } catch (error: any) {
+    log.error(`Error listing Drive files: ${error.message || error}`);
+    if (error.code === 403) {
+      throw new UserError('Permission denied. Make sure you have granted Google Drive access to the application.');
+    }
+    throw new UserError(`Failed to list files: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'searchDriveFiles',
+description: 'Searches all Drive file types by name and/or content, with optional MIME and folder filters.',
+parameters: z.object({
+  query: z.string().min(1),
+  searchIn: z.enum(['name', 'content', 'both']).optional().default('both'),
+  mimeType: z.string().optional(),
+  folderId: z.string().optional(),
+  maxResults: z.number().int().min(1).max(100).optional().default(10),
+  modifiedAfter: z.string().optional(),
+  pageToken: z.string().optional(),
+}),
+execute: async (args, { log }) => {
+  const drive = await getDriveClient();
+  log.info(`Searching Drive files for: "${args.query}" in ${args.searchIn}`);
+  try {
+    const conditions: string[] = ['trashed=false'];
+    if (args.searchIn === 'name') {
+      conditions.push(`name contains ${DriveHelpers.driveQueryQuoted(args.query)}`);
+    } else if (args.searchIn === 'content') {
+      conditions.push(`fullText contains ${DriveHelpers.driveQueryQuoted(args.query)}`);
+    } else {
+      conditions.push(
+        `(name contains ${DriveHelpers.driveQueryQuoted(args.query)} or fullText contains ${DriveHelpers.driveQueryQuoted(args.query)})`
+      );
+    }
+    if (args.mimeType) {
+      const resolved = DRIVE_MIME_TYPE_SHORTCUTS[args.mimeType] ?? args.mimeType;
+      conditions.push(`mimeType=${DriveHelpers.driveQueryQuoted(resolved)}`);
+    }
+    if (args.folderId) {
+      conditions.push(`${DriveHelpers.driveQueryQuoted(args.folderId)} in ancestors`);
+    }
+    if (args.modifiedAfter) {
+      const cutoff = new Date(args.modifiedAfter).toISOString();
+      conditions.push(`modifiedTime > ${DriveHelpers.driveQueryQuoted(cutoff)}`);
+    }
+    const queryString = conditions.join(' and ');
+    const includesFullText = args.searchIn !== 'name';
+    const response = await drive.files.list({
+      q: queryString,
+      pageSize: args.maxResults,
+      ...(includesFullText ? {} : { orderBy: 'modifiedTime desc' }),
+      pageToken: args.pageToken,
+      fields: 'nextPageToken,files(id,name,mimeType,size,modifiedTime,createdTime,webViewLink,owners(displayName,emailAddress),parents)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const files = (response.data.files || []).map((file) => ({
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size != null ? Number(file.size) : null,
+      modifiedTime: file.modifiedTime,
+      createdTime: file.createdTime,
+      owner: file.owners?.[0]?.displayName || null,
+      url: file.webViewLink,
+    }));
+    const result: Record<string, unknown> = { files, total: files.length };
+    if (response.data.nextPageToken) {
+      result.nextPageToken = response.data.nextPageToken;
+      result.hasMore = true;
+    } else {
+      result.hasMore = false;
+    }
+    return JSON.stringify(result, null, 2);
+  } catch (error: any) {
+    log.error(`Error searching Drive files: ${error.message || error}`);
+    if (error.code === 403) {
+      throw new UserError('Permission denied. Make sure you have granted Google Drive access to the application.');
+    }
+    throw new UserError(`Failed to search files: ${error.message || 'Unknown error'}`);
+  }
 }
 });
 
@@ -3385,7 +4571,7 @@ execute: async (args, { log }) => {
 
 server.addTool({
 name: 'formatSpreadsheetCells',
-description: 'Formats cells in a Google Spreadsheet range (background color, text color, bold, italic, font size, alignment).',
+description: 'Formats cells in a Google Spreadsheet range (background color, text color, bold, italic, font size, alignment, wrap, number format).',
 parameters: z.object({
   spreadsheetId: z.string().describe('The ID of the Google Spreadsheet.'),
   range: z.string().describe('Cell range in A1 notation (e.g., "A1:B5" or "Sheet1!A1:C3").'),
@@ -3396,6 +4582,11 @@ parameters: z.object({
   fontSize: z.number().optional().describe('Font size in points.'),
   horizontalAlignment: z.enum(['LEFT', 'CENTER', 'RIGHT']).optional().describe('Horizontal text alignment.'),
   verticalAlignment: z.enum(['TOP', 'MIDDLE', 'BOTTOM']).optional().describe('Vertical text alignment.'),
+  wrapStrategy: z.enum(['OVERFLOW_CELL', 'CLIP', 'WRAP']).optional(),
+  numberFormat: z.object({
+    type: z.enum(['TEXT', 'NUMBER', 'PERCENT', 'CURRENCY', 'DATE', 'TIME', 'DATE_TIME', 'SCIENTIFIC']),
+    pattern: z.string().optional(),
+  }).optional(),
 }),
 execute: async (args, { log }) => {
   const sheets = await getSheetsClient();
@@ -3424,6 +4615,8 @@ execute: async (args, { log }) => {
 
     if (args.horizontalAlignment) format.horizontalAlignment = args.horizontalAlignment;
     if (args.verticalAlignment) format.verticalAlignment = args.verticalAlignment;
+    if (args.wrapStrategy) format.wrapStrategy = args.wrapStrategy;
+    if (args.numberFormat) format.numberFormat = args.numberFormat;
 
     await SheetsHelpers.formatCells(sheets, args.spreadsheetId, args.range, format);
     return `Successfully formatted cells ${args.range}.`;
@@ -3560,6 +4753,1356 @@ execute: async (args, { log }) => {
       throw new UserError("Permission denied. Make sure you have granted Google Drive access to the application.");
     }
     throw new UserError(`Failed to list spreadsheets: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+currentToolGroup = 'sheets-advanced';
+
+server.addTool({
+name: 'batchWrite',
+description: 'Writes data to multiple spreadsheet ranges in one API call.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  data: z.array(z.object({
+    range: z.string().describe('A1 notation range (e.g., "Sheet1!A1:B2").'),
+    values: z.array(z.array(z.any())).describe('2D array of values. Each inner array is a row.'),
+  })).min(1).max(100).describe('Range+values pairs to write.'),
+  valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED').describe('RAW stores as-is; USER_ENTERED parses like typed input.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Batch writing to ${args.data.length} range(s) in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const response = await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: {
+        valueInputOption: args.valueInputOption,
+        data: args.data.map((d) => ({ range: d.range, values: d.values })),
+      },
+    });
+    const totalCells = response.data.totalUpdatedCells || 0;
+    const totalRows = response.data.totalUpdatedRows || 0;
+    const totalColumns = response.data.totalUpdatedColumns || 0;
+    const totalSheets = response.data.totalUpdatedSheets || 0;
+    return `Successfully batch-wrote ${totalCells} cells (${totalRows} rows, ${totalColumns} columns) across ${totalSheets} sheet(s) in ${args.data.length} range(s).`;
+  } catch (error: any) {
+    log.error(`Error batch writing to spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    if (error.code === 404) throw new UserError(`Spreadsheet not found (ID: ${args.spreadsheetId}). Check the ID.`);
+    if (error.code === 403) throw new UserError(`Permission denied for spreadsheet (ID: ${args.spreadsheetId}). Ensure you have write access.`);
+    throw new UserError(`Failed to batch write to spreadsheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'deleteSheet',
+description: 'Deletes a sheet (tab) from a spreadsheet by numeric sheet ID.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetId: z.number().int().describe('Numeric sheet ID to delete.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Deleting sheet ID ${args.sheetId} from spreadsheet ${args.spreadsheetId}`);
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ deleteSheet: { sheetId: args.sheetId } }] },
+    });
+    return `Successfully deleted sheet (ID: ${args.sheetId}) from spreadsheet.`;
+  } catch (error: any) {
+    log.error(`Error deleting sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to delete sheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'duplicateSheet',
+description: 'Duplicates a sheet within a spreadsheet, copying values, formulas, and formatting.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetId: z.number().int().describe('Numeric sheet ID to duplicate.'),
+  newSheetName: z.string().min(1).optional().describe('Name for the duplicated sheet.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Duplicating sheet ID ${args.sheetId} in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ duplicateSheet: { sourceSheetId: args.sheetId, newSheetName: args.newSheetName } }] },
+    });
+    const duplicatedSheet = response.data.replies?.[0]?.duplicateSheet?.properties;
+    if (!duplicatedSheet) {
+      throw new UserError('Failed to duplicate sheet - no sheet properties returned.');
+    }
+    return `Successfully duplicated sheet as "${duplicatedSheet.title}" (Sheet ID: ${duplicatedSheet.sheetId}).`;
+  } catch (error: any) {
+    log.error(`Error duplicating sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to duplicate sheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'copySheetTo',
+description: 'Copies a sheet from one spreadsheet to another.',
+parameters: z.object({
+  sourceSpreadsheetId: z.string().describe('Source spreadsheet ID.'),
+  sheetId: z.number().int().describe('Numeric sheet ID to copy.'),
+  destinationSpreadsheetId: z.string().describe('Destination spreadsheet ID.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Copying sheet ${args.sheetId} from ${args.sourceSpreadsheetId} to ${args.destinationSpreadsheetId}`);
+  try {
+    const response = await sheets.spreadsheets.sheets.copyTo({
+      spreadsheetId: args.sourceSpreadsheetId,
+      sheetId: args.sheetId,
+      requestBody: { destinationSpreadsheetId: args.destinationSpreadsheetId },
+    });
+    const props = response.data;
+    return `Successfully copied sheet to destination as "${props.title}" (Sheet ID: ${props.sheetId}).`;
+  } catch (error: any) {
+    log.error(`Error copying sheet: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to copy sheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'renameSheet',
+description: 'Renames a sheet (tab) in a spreadsheet.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetId: z.number().int().describe('Numeric sheet ID to rename.'),
+  newName: z.string().min(1).describe('The new name for the sheet.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Renaming sheet ID ${args.sheetId} to "${args.newName}"`);
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: {
+        requests: [{
+          updateSheetProperties: {
+            properties: { sheetId: args.sheetId, title: args.newName },
+            fields: 'title',
+          },
+        }],
+      },
+    });
+    return `Successfully renamed sheet (ID: ${args.sheetId}) to "${args.newName}".`;
+  } catch (error: any) {
+    log.error(`Error renaming sheet in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to rename sheet: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'copyFormatting',
+description: 'Copies formatting (not values) from a source range to a destination range.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sourceSheetName: z.string().min(1).describe('Source sheet name.'),
+  sourceRange: z.string().describe('Source A1 range without sheet name.'),
+  destinationSheetName: z.string().min(1).describe('Destination sheet name.'),
+  destinationRange: z.string().describe('Destination A1 range without sheet name.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Copying formatting from ${args.sourceSheetName}!${args.sourceRange} to ${args.destinationSheetName}!${args.destinationRange}`);
+  try {
+    const sourceSheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sourceSheetName);
+    const destSheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.destinationSheetName);
+    const sourceGridRange = SheetsHelpers.parseA1ToGridRange(args.sourceRange, sourceSheetId);
+    const destGridRange = SheetsHelpers.parseA1ToGridRange(args.destinationRange, destSheetId);
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: {
+        requests: [{
+          copyPaste: {
+            source: sourceGridRange,
+            destination: destGridRange,
+            pasteType: 'PASTE_FORMAT',
+          },
+        }],
+      },
+    });
+    return `Successfully copied formatting from ${args.sourceSheetName}!${args.sourceRange} to ${args.destinationSheetName}!${args.destinationRange}.`;
+  } catch (error: any) {
+    log.error(`Error copying formatting in spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to copy formatting: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'readCellFormat',
+description: 'Reads per-cell formatting for a range and returns JSON.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  range: z.string().describe('A1 notation range to read formatting from.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Reading cell format for range "${args.range}" in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const response = await sheets.spreadsheets.get({
+      spreadsheetId: args.spreadsheetId,
+      ranges: [args.range],
+      includeGridData: true,
+      fields: 'sheets.data.rowData.values.userEnteredFormat,sheets.data.startRow,sheets.data.startColumn',
+    });
+    const sheetData = response.data.sheets?.[0]?.data?.[0];
+    if (!sheetData?.rowData) {
+      return JSON.stringify({ range: args.range, cells: [] }, null, 2);
+    }
+    const startRow = sheetData.startRow ?? 0;
+    const startCol = sheetData.startColumn ?? 0;
+    const cells: Array<{ cell: string; format: Record<string, unknown> }> = [];
+    const rgbaToHex = (color: { red?: number | null; green?: number | null; blue?: number | null } | null | undefined): string | null => {
+      if (!color) return null;
+      const r = Math.round((color.red ?? 0) * 255);
+      const g = Math.round((color.green ?? 0) * 255);
+      const b = Math.round((color.blue ?? 0) * 255);
+      return `#${r.toString(16).padStart(2, '0').toUpperCase()}${g.toString(16).padStart(2, '0').toUpperCase()}${b.toString(16).padStart(2, '0').toUpperCase()}`;
+    };
+    for (let rowIdx = 0; rowIdx < sheetData.rowData.length; rowIdx++) {
+      const row = sheetData.rowData[rowIdx];
+      if (!row.values) continue;
+      for (let colIdx = 0; colIdx < row.values.length; colIdx++) {
+        const fmt = row.values[colIdx]?.userEnteredFormat as any;
+        if (!fmt) continue;
+        const result: Record<string, unknown> = {};
+        if (fmt.textFormat) {
+          const tf: Record<string, unknown> = {};
+          if (fmt.textFormat.bold) tf.bold = true;
+          if (fmt.textFormat.italic) tf.italic = true;
+          if (fmt.textFormat.strikethrough) tf.strikethrough = true;
+          if (fmt.textFormat.underline) tf.underline = true;
+          if (fmt.textFormat.fontSize != null) tf.fontSize = fmt.textFormat.fontSize;
+          if (fmt.textFormat.fontFamily) tf.fontFamily = fmt.textFormat.fontFamily;
+          if (fmt.textFormat.foregroundColorStyle?.rgbColor) tf.foregroundColor = rgbaToHex(fmt.textFormat.foregroundColorStyle.rgbColor);
+          else if (fmt.textFormat.foregroundColor) tf.foregroundColor = rgbaToHex(fmt.textFormat.foregroundColor);
+          if (Object.keys(tf).length > 0) result.textFormat = tf;
+        }
+        if (fmt.backgroundColorStyle?.rgbColor) result.backgroundColor = rgbaToHex(fmt.backgroundColorStyle.rgbColor);
+        else if (fmt.backgroundColor) result.backgroundColor = rgbaToHex(fmt.backgroundColor);
+        if (fmt.horizontalAlignment) result.horizontalAlignment = fmt.horizontalAlignment;
+        if (fmt.verticalAlignment) result.verticalAlignment = fmt.verticalAlignment;
+        if (fmt.numberFormat) result.numberFormat = { type: fmt.numberFormat.type, pattern: fmt.numberFormat.pattern };
+        if (fmt.wrapStrategy) result.wrapStrategy = fmt.wrapStrategy;
+        if (Object.keys(result).length > 0) {
+          cells.push({ cell: SheetsHelpers.rowColToA1(startRow + rowIdx, startCol + colIdx), format: result });
+        }
+      }
+    }
+    return JSON.stringify({ range: args.range, cells }, null, 2);
+  } catch (error: any) {
+    log.error(`Error reading cell format for spreadsheet ${args.spreadsheetId}: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to read cell format: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'setCellBorders',
+description: 'Sets top/bottom/left/right/inner borders on a cell range.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  range: z.string().describe('A1 notation range.'),
+  top: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+  bottom: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+  left: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+  right: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+  innerHorizontal: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+  innerVertical: z.object({ style: z.enum(['SOLID', 'SOLID_MEDIUM', 'SOLID_THICK', 'DOTTED', 'DASHED', 'DOUBLE', 'NONE']), color: z.string().optional() }).optional(),
+}).refine(
+  (d) => d.top !== undefined || d.bottom !== undefined || d.left !== undefined || d.right !== undefined || d.innerHorizontal !== undefined || d.innerVertical !== undefined,
+  { message: 'At least one border side must be specified.' }
+),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Setting borders on range "${args.range}" in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const { sheetName, a1Range } = SheetsHelpers.parseRange(args.range);
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, sheetName);
+    const gridRange = SheetsHelpers.parseA1ToGridRange(a1Range, sheetId);
+    const buildBorder = (b: { style: string; color?: string } | undefined) => {
+      if (!b) return undefined;
+      const border: sheets_v4.Schema$Border = { style: b.style };
+      if (b.color) {
+        const rgb = SheetsHelpers.hexToRgb(b.color);
+        if (!rgb) throw new UserError(`Invalid border color: "${b.color}".`);
+        border.colorStyle = { rgbColor: rgb };
+      }
+      return border;
+    };
+    const borders: Record<string, unknown> = {};
+    if (args.top !== undefined) borders.top = buildBorder(args.top);
+    if (args.bottom !== undefined) borders.bottom = buildBorder(args.bottom);
+    if (args.left !== undefined) borders.left = buildBorder(args.left);
+    if (args.right !== undefined) borders.right = buildBorder(args.right);
+    if (args.innerHorizontal !== undefined) borders.innerHorizontal = buildBorder(args.innerHorizontal);
+    if (args.innerVertical !== undefined) borders.innerVertical = buildBorder(args.innerVertical);
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ updateBorders: { range: gridRange, ...borders } }] },
+    });
+    return `Successfully set borders on range "${args.range}".`;
+  } catch (error: any) {
+    log.error(`Error setting borders: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set borders: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'freezeRowsAndColumns',
+description: 'Pins rows and/or columns so they stay visible when scrolling.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  frozenRows: z.number().int().min(0).optional().describe('Rows to freeze from the top. 0 unfreezes.'),
+  frozenColumns: z.number().int().min(0).optional().describe('Columns to freeze from the left. 0 unfreezes.'),
+}).refine((data) => data.frozenRows !== undefined || data.frozenColumns !== undefined, {
+  message: 'At least one of frozenRows or frozenColumns must be provided.',
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Freezing rows/columns in spreadsheet ${args.spreadsheetId}`);
+  try {
+    await SheetsHelpers.freezeRowsAndColumns(sheets, args.spreadsheetId, args.sheetName, args.frozenRows, args.frozenColumns);
+    const parts: string[] = [];
+    if (args.frozenRows !== undefined) {
+      parts.push(args.frozenRows === 0 ? 'unfroze rows' : `froze top ${args.frozenRows} row(s)`);
+    }
+    if (args.frozenColumns !== undefined) {
+      parts.push(args.frozenColumns === 0 ? 'unfroze columns' : `froze left ${args.frozenColumns} column(s)`);
+    }
+    return `Successfully ${parts.join(' and ')}.`;
+  } catch (error: any) {
+    log.error(`Error freezing rows/columns: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to freeze rows/columns: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'setDropdownValidation',
+description: 'Adds or removes a dropdown list on a range of cells.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  range: z.string().describe('A1 notation range to apply the dropdown to.'),
+  values: z.array(z.string()).optional().describe('Dropdown options. Omit to remove validation.'),
+  strict: z.boolean().optional().default(true).describe('If true, reject values not in the list.'),
+  inputMessage: z.string().optional().describe('Help text shown when the cell is selected.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  const isClearing = !args.values || args.values.length === 0;
+  log.info(`${isClearing ? 'Clearing' : 'Setting'} dropdown validation on "${args.range}"`);
+  try {
+    await SheetsHelpers.setDropdownValidation(sheets, args.spreadsheetId, args.range, args.values, args.strict, args.inputMessage);
+    if (isClearing) {
+      return `Successfully removed dropdown validation from range "${args.range}".`;
+    }
+    return `Successfully added dropdown validation to range "${args.range}" with ${args.values!.length} options: ${args.values!.join(', ')}.`;
+  } catch (error: any) {
+    log.error(`Error setting dropdown validation: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set dropdown validation: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'setColumnWidths',
+description: 'Sets pixel widths for one or more columns or column ranges.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  columnWidths: z.array(z.object({
+    column: z.string().describe('Column or range in A1 letters (e.g., "A", "B:D").'),
+    width: z.number().int().min(0).describe('Width in pixels. 0 hides the column.'),
+  })).min(1).describe('Column width specifications.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Setting column widths in spreadsheet ${args.spreadsheetId}`);
+  try {
+    await SheetsHelpers.setColumnWidths(sheets, args.spreadsheetId, args.sheetName, args.columnWidths);
+    const summary = args.columnWidths.map((cw) => `${cw.column}=${cw.width}px`).join(', ');
+    return `Successfully set column widths: ${summary}.`;
+  } catch (error: any) {
+    log.error(`Error setting column widths: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set column widths: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'setRowHeights',
+description: 'Sets a fixed pixel height for a range of rows.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  startRow: z.number().int().min(1).describe('1-based start row (inclusive).'),
+  endRow: z.number().int().min(1).describe('1-based end row (inclusive).'),
+  pixelSize: z.number().int().min(2).describe('Height in pixels.'),
+}).refine((d) => d.endRow >= d.startRow, { message: 'endRow must be greater than or equal to startRow.' }),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Setting row heights in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: {
+        requests: [{
+          updateDimensionProperties: {
+            range: { sheetId, dimension: 'ROWS', startIndex: args.startRow - 1, endIndex: args.endRow },
+            properties: { pixelSize: args.pixelSize },
+            fields: 'pixelSize',
+          },
+        }],
+      },
+    });
+    return `Successfully set rows ${args.startRow}–${args.endRow} to ${args.pixelSize}px height.`;
+  } catch (error: any) {
+    log.error(`Error setting row heights: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to set row heights: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'autoResizeColumns',
+description: 'Auto-resizes columns to fit their content.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  columns: z.string().optional().describe('Column range such as "A:S". Omit to resize all columns.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Auto-resizing columns in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const dimensionRange: sheets_v4.Schema$DimensionRange = { sheetId, dimension: 'COLUMNS' };
+    if (args.columns) {
+      const colonIdx = args.columns.indexOf(':');
+      if (colonIdx !== -1) {
+        dimensionRange.startIndex = SheetsHelpers.colLettersToIndex(args.columns.slice(0, colonIdx).trim());
+        dimensionRange.endIndex = SheetsHelpers.colLettersToIndex(args.columns.slice(colonIdx + 1).trim()) + 1;
+      } else {
+        const idx = SheetsHelpers.colLettersToIndex(args.columns.trim());
+        dimensionRange.startIndex = idx;
+        dimensionRange.endIndex = idx + 1;
+      }
+    }
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ autoResizeDimensions: { dimensions: dimensionRange } }] },
+    });
+    const rangeDesc = args.columns ? `columns ${args.columns}` : 'all columns';
+    return `Successfully auto-resized ${rangeDesc} to fit content.`;
+  } catch (error: any) {
+    log.error(`Error auto-resizing columns: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to auto-resize columns: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'autoResizeRows',
+description: 'Auto-resizes rows to fit their content.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  startRow: z.number().int().min(1).optional().describe('1-based start row. Omit to start from row 1.'),
+  endRow: z.number().int().min(1).optional().describe('1-based end row. Omit to resize to the last row.'),
+}).refine((d) => d.startRow === undefined || d.endRow === undefined || d.endRow >= d.startRow, {
+  message: 'endRow must be greater than or equal to startRow.',
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Auto-resizing rows in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const dimensionRange: sheets_v4.Schema$DimensionRange = { sheetId, dimension: 'ROWS' };
+    if (args.startRow !== undefined) dimensionRange.startIndex = args.startRow - 1;
+    if (args.endRow !== undefined) dimensionRange.endIndex = args.endRow;
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ autoResizeDimensions: { dimensions: dimensionRange } }] },
+    });
+    const rangeDesc = args.startRow !== undefined ? `rows ${args.startRow}–${args.endRow ?? 'end'}` : 'all rows';
+    return `Successfully auto-resized ${rangeDesc} to fit content.`;
+  } catch (error: any) {
+    log.error(`Error auto-resizing rows: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to auto-resize rows: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'protectRange',
+description: 'Locks a range or entire sheet to prevent accidental edits.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  range: z.string().optional().describe('A1 range to protect. Omit to protect the entire sheet.'),
+  description: z.string().optional().describe('Human-readable protection description.'),
+  warningOnly: z.boolean().optional().describe('If true, warn on edit instead of blocking.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Protecting range in spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const protectedRange: sheets_v4.Schema$ProtectedRange = {
+      description: args.description ?? '',
+      warningOnly: args.warningOnly ?? false,
+      range: args.range ? SheetsHelpers.parseA1ToGridRange(args.range, sheetId) : { sheetId },
+    };
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ addProtectedRange: { protectedRange } }] },
+    });
+    const result = response.data.replies?.[0]?.addProtectedRange?.protectedRange;
+    const target = args.range ? `range "${args.range}"` : 'entire sheet';
+    const mode = args.warningOnly ? 'warning-only' : 'fully locked';
+    return `Successfully protected ${target} (Protection ID: ${result?.protectedRangeId}, mode: ${mode}).`;
+  } catch (error: any) {
+    log.error(`Error protecting range: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to protect range: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+const SHEETS_ONE_VALUE_CONDITIONS = [
+  'NUMBER_GREATER', 'NUMBER_GREATER_THAN_EQ', 'NUMBER_LESS', 'NUMBER_LESS_THAN_EQ',
+  'NUMBER_EQ', 'NUMBER_NOT_EQ', 'CUSTOM_FORMULA',
+] as const;
+const SHEETS_TWO_VALUE_CONDITIONS = ['NUMBER_BETWEEN', 'NUMBER_NOT_BETWEEN'] as const;
+const SHEETS_NO_VALUE_CONDITIONS = ['BLANK', 'NOT_BLANK'] as const;
+const SHEETS_ALL_CONDITION_TYPES = [
+  ...SHEETS_ONE_VALUE_CONDITIONS, ...SHEETS_TWO_VALUE_CONDITIONS, ...SHEETS_NO_VALUE_CONDITIONS,
+] as const;
+
+server.addTool({
+name: 'addConditionalFormatting',
+description: 'Adds a boolean conditional formatting rule to one or more ranges.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  ranges: z.array(z.string()).min(1).describe('A1 ranges the rule applies to.'),
+  conditionType: z.enum(SHEETS_ALL_CONDITION_TYPES).describe('Condition type.'),
+  conditionValues: z.array(z.string()).optional().describe('Condition values. Count depends on conditionType.'),
+  backgroundColor: z.string().optional().describe('Background hex color.'),
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  foregroundColor: z.string().optional().describe('Text hex color.'),
+  fontSize: z.number().min(1).optional(),
+})
+  .refine((data) =>
+    data.backgroundColor !== undefined || data.bold !== undefined || data.italic !== undefined ||
+    data.strikethrough !== undefined || data.underline !== undefined ||
+    data.foregroundColor !== undefined || data.fontSize !== undefined,
+  { message: 'At least one formatting option must be provided.' })
+  .refine((data) => {
+    const values = data.conditionValues ?? [];
+    if ((SHEETS_NO_VALUE_CONDITIONS as readonly string[]).includes(data.conditionType)) return values.length === 0;
+    if ((SHEETS_TWO_VALUE_CONDITIONS as readonly string[]).includes(data.conditionType)) return values.length === 2;
+    return values.length === 1;
+  }, { message: 'conditionValues count must match conditionType (0 for BLANK/NOT_BLANK, 2 for BETWEEN, 1 otherwise).' }),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Adding conditional format rule to spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const gridRanges = args.ranges.map((r) => {
+      const { a1Range } = SheetsHelpers.parseRange(r);
+      return SheetsHelpers.parseA1ToGridRange(a1Range, sheetId);
+    });
+    const conditionValues = (args.conditionValues ?? []).map((v) => ({ userEnteredValue: v }));
+    const format: Record<string, unknown> = {};
+    if (args.backgroundColor) {
+      const rgb = SheetsHelpers.hexToRgb(args.backgroundColor);
+      if (!rgb) throw new UserError(`Invalid background color: "${args.backgroundColor}".`);
+      format.backgroundColor = rgb;
+    }
+    const hasTextFormat =
+      args.bold !== undefined || args.italic !== undefined || args.strikethrough !== undefined ||
+      args.underline !== undefined || args.fontSize !== undefined || args.foregroundColor !== undefined;
+    if (hasTextFormat) {
+      const textFormat: Record<string, unknown> = {};
+      if (args.bold !== undefined) textFormat.bold = args.bold;
+      if (args.italic !== undefined) textFormat.italic = args.italic;
+      if (args.strikethrough !== undefined) textFormat.strikethrough = args.strikethrough;
+      if (args.underline !== undefined) textFormat.underline = args.underline;
+      if (args.fontSize !== undefined) textFormat.fontSize = args.fontSize;
+      if (args.foregroundColor) {
+        const rgb = SheetsHelpers.hexToRgb(args.foregroundColor);
+        if (!rgb) throw new UserError(`Invalid foreground color: "${args.foregroundColor}".`);
+        textFormat.foregroundColor = rgb;
+      }
+      format.textFormat = textFormat;
+    }
+    await SheetsHelpers.addConditionalFormatRule(
+      sheets, args.spreadsheetId, gridRanges, args.conditionType, conditionValues, format
+    );
+    return `Successfully added conditional formatting rule to ${args.ranges.join(', ')}.`;
+  } catch (error: any) {
+    log.error(`Error adding conditional format rule: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to add conditional formatting: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'getConditionalFormatting',
+description: 'Lists conditional formatting rules for a sheet as JSON.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Getting conditional formatting rules for spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const response = await sheets.spreadsheets.get({
+      spreadsheetId: args.spreadsheetId,
+      fields: 'sheets(properties(sheetId,title),conditionalFormats)',
+    });
+    const sheet = response.data.sheets?.find((s) => s.properties?.sheetId === sheetId);
+    const rules = sheet?.conditionalFormats ?? [];
+    const colIndexToLetters = (index: number): string => {
+      let s = '';
+      let i = index;
+      do {
+        s = String.fromCharCode(65 + (i % 26)) + s;
+        i = Math.floor(i / 26) - 1;
+      } while (i >= 0);
+      return s;
+    };
+    const rgbToHex = (rgb: { red?: number; green?: number; blue?: number } | null | undefined): string => {
+      if (!rgb) return '#000000';
+      const r = Math.round((rgb.red ?? 0) * 255);
+      const g = Math.round((rgb.green ?? 0) * 255);
+      const b = Math.round((rgb.blue ?? 0) * 255);
+      return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`.toUpperCase();
+    };
+    const ruleSummaries = rules.map((rule, idx) => {
+      const condition = rule.booleanRule?.condition;
+      const gradient = rule.gradientRule;
+      const fmt = rule.booleanRule?.format ?? {};
+      const ranges = (rule.ranges ?? []).map((r) => {
+        const startCol = r.startColumnIndex != null ? colIndexToLetters(r.startColumnIndex) : '';
+        const endCol = r.endColumnIndex != null ? colIndexToLetters(r.endColumnIndex - 1) : '';
+        const startRow = r.startRowIndex != null ? r.startRowIndex + 1 : '';
+        const endRow = r.endRowIndex != null ? r.endRowIndex : '';
+        return `${startCol}${startRow}:${endCol}${endRow}`;
+      });
+      const bg = fmt.backgroundColor;
+      const fg = fmt.textFormat?.foregroundColor;
+      return {
+        index: idx,
+        kind: gradient ? 'GRADIENT' : 'BOOLEAN',
+        ranges,
+        conditionType: condition?.type ?? (gradient ? 'GRADIENT' : null),
+        conditionValues: (condition?.values ?? []).map((v) => v.userEnteredValue).filter((v): v is string => typeof v === 'string'),
+        backgroundColor: bg ? rgbToHex({ red: bg.red ?? 0, green: bg.green ?? 0, blue: bg.blue ?? 0 }) : null,
+        textColor: fg ? rgbToHex({ red: fg.red ?? 0, green: fg.green ?? 0, blue: fg.blue ?? 0 }) : null,
+        bold: fmt.textFormat?.bold ?? false,
+        italic: fmt.textFormat?.italic ?? false,
+      };
+    });
+    return JSON.stringify({
+      spreadsheetId: args.spreadsheetId,
+      sheetName: sheet?.properties?.title ?? null,
+      count: ruleSummaries.length,
+      rules: ruleSummaries,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error getting conditional formatting: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to get conditional formatting: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'deleteConditionalFormatting',
+description: 'Deletes conditional formatting rules by 0-based index.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  ruleIndices: z.array(z.number().int().min(0)).min(1).describe('0-based rule indices to delete.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Deleting conditional formatting rules from spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const indices = [...args.ruleIndices].sort((a, b) => b - a);
+    const requests = indices.map((index) => ({ deleteConditionalFormatRule: { sheetId, index } }));
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests },
+    });
+    return `Successfully deleted ${indices.length} conditional formatting rule(s) at indices: ${args.ruleIndices.join(', ')}.`;
+  } catch (error: any) {
+    log.error(`Error deleting conditional formatting: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to delete conditional formatting: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'groupRows',
+description: 'Creates collapsible row groups from 1-based inclusive ranges.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  groups: z.array(z.object({
+    startRowIndex: z.number().int().min(1).describe('1-based first row in the group (inclusive).'),
+    endRowIndex: z.number().int().describe('1-based last row in the group (inclusive).'),
+  })).min(1).describe('Row ranges to group.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Grouping rows in spreadsheet ${args.spreadsheetId}`);
+  try {
+    for (const group of args.groups) {
+      if (group.startRowIndex < 1) {
+        throw new UserError(`startRowIndex must be >= 1, got ${group.startRowIndex}.`);
+      }
+      if (group.endRowIndex < group.startRowIndex) {
+        throw new UserError(
+          `endRowIndex ${group.endRowIndex} must be >= startRowIndex ${group.startRowIndex}.`
+        );
+      }
+    }
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const requests = args.groups.map(({ startRowIndex, endRowIndex }) => ({
+      addDimensionGroup: {
+        range: { sheetId, dimension: 'ROWS', startIndex: startRowIndex - 1, endIndex: endRowIndex },
+      },
+    }));
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests },
+    });
+    return `Successfully created ${args.groups.length} row group(s).`;
+  } catch (error: any) {
+    log.error(`Error grouping rows: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to group rows: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'ungroupAllRows',
+description: 'Removes all row groupings from a sheet.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet name. Defaults to the first sheet.'),
+  totalRows: z.number().int().optional().default(500).describe('Rows to clear groups from (default 500).'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Removing all row groups from spreadsheet ${args.spreadsheetId}`);
+  try {
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, args.sheetName);
+    const totalRows = args.totalRows ?? 500;
+    const request = {
+      deleteDimensionGroup: {
+        range: { sheetId, dimension: 'ROWS', startIndex: 0, endIndex: totalRows },
+      },
+    };
+    let removed = 0;
+    while (true) {
+      try {
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: args.spreadsheetId,
+          requestBody: { requests: [request] },
+        });
+        removed++;
+      } catch (err: any) {
+        if (err.code === 400) break;
+        throw err;
+      }
+    }
+    return `Successfully removed all row groups (${removed} level(s) cleared).`;
+  } catch (error: any) {
+    log.error(`Error removing row groups: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to remove row groups: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'insertChart',
+description: 'Inserts a bar, column, line, area, scatter, pie, donut, or treemap chart.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Sheet containing the data.'),
+  chartType: z.enum(['BAR', 'COLUMN', 'LINE', 'AREA', 'SCATTER', 'PIE', 'DONUT', 'TREEMAP']).describe('Chart type.'),
+  stackedType: z.enum(['NOT_STACKED', 'STACKED', 'PERCENT_STACKED']).default('NOT_STACKED').describe('Stacking for bar/column/area charts.'),
+  title: z.string().optional().describe('Chart title.'),
+  dataRange: z.string().describe('A1 data range, including header row if present.'),
+  headerRow: z.boolean().default(true).describe('Whether the first row is a header.'),
+  labelColumnIndex: z.number().int().min(1).optional().describe('1-based label column for pie/donut/treemap.'),
+  parentColumnIndex: z.number().int().min(1).optional().describe('1-based parent column for treemap.'),
+  valueColumnIndex: z.number().int().min(1).optional().describe('1-based value column for pie/donut/treemap.'),
+  anchorRow: z.number().int().min(0).default(0).describe('0-based anchor row.'),
+  anchorColumn: z.number().int().min(0).default(6).describe('0-based anchor column.'),
+  offsetXPixels: z.number().int().default(0),
+  offsetYPixels: z.number().int().default(0),
+  widthPixels: z.number().int().default(600),
+  heightPixels: z.number().int().default(400),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Inserting ${args.chartType} chart into spreadsheet ${args.spreadsheetId}`);
+  try {
+    const { sheetName: dataSheetName, a1Range } = SheetsHelpers.parseRange(args.dataRange);
+    if (dataSheetName && args.sheetName && dataSheetName !== args.sheetName) {
+      throw new UserError(
+        `dataRange sheet "${dataSheetName}" does not match sheetName "${args.sheetName}".`
+      );
+    }
+    const sheetId = await SheetsHelpers.resolveSheetId(
+      sheets,
+      args.spreadsheetId,
+      dataSheetName || args.sheetName
+    );
+    const gridRange = SheetsHelpers.parseA1ToGridRange(a1Range, sheetId);
+    const startRow = gridRange.startRowIndex ?? 0;
+    const endRow = gridRange.endRowIndex ?? startRow + 1;
+    const startCol = gridRange.startColumnIndex ?? 0;
+    const endCol = gridRange.endColumnIndex ?? startCol + 1;
+    const dataStartRow = args.headerRow ? startRow + 1 : startRow;
+    const labelCol = startCol + (args.labelColumnIndex ? args.labelColumnIndex - 1 : 0);
+    const valueCol = startCol + (args.valueColumnIndex ? args.valueColumnIndex - 1 : 1);
+    const parentCol = startCol + (args.parentColumnIndex ? args.parentColumnIndex - 1 : 0);
+    const makeSourceRange = (colStart: number, colEnd: number, rowStart = dataStartRow) => ({
+      sources: [{ sheetId, startRowIndex: rowStart, endRowIndex: endRow, startColumnIndex: colStart, endColumnIndex: colEnd }],
+    });
+    let chartSpec: Record<string, unknown> = {};
+    if (args.chartType === 'PIE' || args.chartType === 'DONUT') {
+      chartSpec.pieChart = {
+        legendPosition: 'LABELED_LEGEND',
+        pieHole: args.chartType === 'DONUT' ? 0.5 : 0,
+        domain: { data: { sourceRange: makeSourceRange(labelCol, labelCol + 1) } },
+        series: { data: { sourceRange: makeSourceRange(valueCol, valueCol + 1) } },
+      };
+    } else if (args.chartType === 'TREEMAP') {
+      chartSpec.treemapChart = {
+        labels: { sourceRange: makeSourceRange(labelCol, labelCol + 1) },
+        parentLabels: { sourceRange: makeSourceRange(parentCol, parentCol + 1) },
+        sizeData: { sourceRange: makeSourceRange(valueCol, valueCol + 1) },
+        colorData: { sourceRange: makeSourceRange(valueCol, valueCol + 1) },
+      };
+    } else {
+      const seriesCount = endCol - startCol - 1;
+      if (seriesCount < 1) {
+        throw new UserError('Chart data range must include a domain column and at least one series column.');
+      }
+      const series = Array.from({ length: seriesCount }, (_, i) => ({
+        series: {
+          sourceRange: {
+            sources: [{
+              sheetId,
+              startRowIndex: startRow,
+              endRowIndex: endRow,
+              startColumnIndex: startCol + 1 + i,
+              endColumnIndex: startCol + 2 + i,
+            }],
+          },
+        },
+        targetAxis: 'LEFT_AXIS',
+      }));
+      chartSpec.basicChart = {
+        chartType: args.chartType,
+        stackedType: args.stackedType,
+        legendPosition: 'BOTTOM_LEGEND',
+        axis: [{ position: 'BOTTOM_AXIS', title: '' }, { position: 'LEFT_AXIS', title: '' }],
+        domains: [{
+          domain: {
+            sourceRange: {
+              sources: [{
+                sheetId,
+                startRowIndex: startRow,
+                endRowIndex: endRow,
+                startColumnIndex: startCol,
+                endColumnIndex: startCol + 1,
+              }],
+            },
+          },
+          reversed: false,
+        }],
+        series,
+        headerCount: args.headerRow ? 1 : 0,
+      };
+    }
+    if (args.title) chartSpec.title = args.title;
+    const response = await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: {
+        requests: [{
+          addChart: {
+            chart: {
+              spec: chartSpec,
+              position: {
+                overlayPosition: {
+                  anchorCell: { sheetId, rowIndex: args.anchorRow, columnIndex: args.anchorColumn },
+                  offsetXPixels: args.offsetXPixels,
+                  offsetYPixels: args.offsetYPixels,
+                  widthPixels: args.widthPixels,
+                  heightPixels: args.heightPixels,
+                },
+              },
+            },
+          },
+        }],
+      },
+    });
+    const chartId = response.data.replies?.[0]?.addChart?.chart?.chartId;
+    return `Chart created successfully${chartId ? ` (Chart ID: ${chartId})` : ''}.`;
+  } catch (error: any) {
+    log.error(`Error inserting chart: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to insert chart: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'deleteChart',
+description: 'Deletes a chart from a spreadsheet by chart ID.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  chartId: z.number().int().describe('Numeric chart ID to delete.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Deleting chart ${args.chartId} from spreadsheet ${args.spreadsheetId}`);
+  try {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: args.spreadsheetId,
+      requestBody: { requests: [{ deleteEmbeddedObject: { objectId: args.chartId } }] },
+    });
+    return `Chart ${args.chartId} deleted successfully.`;
+  } catch (error: any) {
+    log.error(`Error deleting chart: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to delete chart: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'createTable',
+description: 'Creates a named Sheets table with optional typed columns.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  name: z.string().min(1).describe('Unique table name.'),
+  range: z.string().describe('A1 range for the table (e.g., "Sheet1!A1:E10").'),
+  columns: z.array(z.object({
+    columnName: z.string().min(1).describe('Column header name.'),
+    columnType: z.enum(['TEXT', 'NUMBER', 'DATE', 'DROPDOWN', 'CHECKBOX', 'PERCENT', 'CURRENCY']).optional(),
+    dropdownValues: z.array(z.string()).optional().describe('Required for DROPDOWN type.'),
+  })).optional().describe('Column definitions.'),
+  hasHeaderRow: z.boolean().optional().default(true),
+  hasFooterRow: z.boolean().optional().default(false),
+}).refine((data) => {
+  if (data.columns) {
+    for (const col of data.columns) {
+      if (col.columnType === 'DROPDOWN' && (!col.dropdownValues || col.dropdownValues.length === 0)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}, { message: 'DROPDOWN column type requires dropdownValues to be specified with at least one option.', path: ['columns'] }),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Creating table "${args.name}" in spreadsheet: ${args.spreadsheetId}`);
+  try {
+    const { sheetName, a1Range } = SheetsHelpers.parseRange(args.range);
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, sheetName);
+    const gridRange = SheetsHelpers.parseA1ToGridRange(a1Range, sheetId);
+    let columnProperties: sheets_v4.Schema$TableColumnProperties[] | undefined;
+    if (args.columns && args.columns.length > 0) {
+      columnProperties = args.columns.map((col, index) => {
+        const prop: sheets_v4.Schema$TableColumnProperties = { columnIndex: index, columnName: col.columnName };
+        if (col.columnType) prop.columnType = col.columnType;
+        if (col.columnType === 'DROPDOWN' && col.dropdownValues && col.dropdownValues.length > 0) {
+          prop.dataValidationRule = {
+            condition: {
+              type: 'ONE_OF_LIST',
+              values: col.dropdownValues.map((v) => ({ userEnteredValue: v })),
+            },
+          };
+        }
+        return prop;
+      });
+    }
+    const rowsProperties: sheets_v4.Schema$TableRowsProperties = {
+      ...(args.hasHeaderRow ? { headerColorStyle: {} } : {}),
+      ...(args.hasFooterRow ? { footerColorStyle: {} } : {}),
+    };
+    const table = await SheetsHelpers.createTableHelper(sheets, args.spreadsheetId, {
+      name: args.name,
+      range: gridRange,
+      columnProperties,
+      rowsProperties,
+    });
+    return JSON.stringify({
+      tableId: table.tableId,
+      name: table.name,
+      range: args.range,
+      columnCount: table.columnProperties?.length || 0,
+      message: `Table "${args.name}" created successfully.`,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error creating table: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to create table: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'listTables',
+description: 'Lists Sheets tables in a spreadsheet or specific sheet.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  sheetName: z.string().optional().describe('Optional sheet filter.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Listing tables for spreadsheet: ${args.spreadsheetId}`);
+  try {
+    const tables = await SheetsHelpers.listAllTables(sheets, args.spreadsheetId, args.sheetName);
+    if (tables.length === 0) {
+      return JSON.stringify({
+        spreadsheetId: args.spreadsheetId,
+        sheetFilter: args.sheetName || 'All sheets',
+        tables: [],
+        message: 'No tables found. Use createTable to create a table.',
+      }, null, 2);
+    }
+    const tableList = tables.map((item) => ({
+      tableId: item.table.tableId,
+      name: item.table.name,
+      sheetName: item.sheetName,
+      columnCount: item.table.columnProperties?.length || 0,
+      range: item.table.range
+        ? `${item.sheetName}!${SheetsHelpers.rowColToA1(item.table.range.startRowIndex || 0, item.table.range.startColumnIndex || 0)}:${SheetsHelpers.rowColToA1((item.table.range.endRowIndex || 1) - 1, (item.table.range.endColumnIndex || 1) - 1)}`
+        : 'Unknown',
+    }));
+    return JSON.stringify({
+      spreadsheetId: args.spreadsheetId,
+      sheetFilter: args.sheetName || 'All sheets',
+      count: tableList.length,
+      tables: tableList,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error listing tables: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to list tables: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'getTable',
+description: 'Gets detailed information about a Sheets table by name or ID.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  tableIdentifier: z.string().describe('Table name or ID.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Getting table details for: ${args.tableIdentifier}`);
+  try {
+    const { table, sheetName, sheetId } = await SheetsHelpers.resolveTableIdentifier(sheets, args.spreadsheetId, args.tableIdentifier);
+    const columns = table.columnProperties?.map((col) => ({ index: col.columnIndex, name: col.columnName })) || [];
+    const range = table.range
+      ? `${sheetName}!${SheetsHelpers.rowColToA1(table.range.startRowIndex || 0, table.range.startColumnIndex || 0)}:${SheetsHelpers.rowColToA1((table.range.endRowIndex || 1) - 1, (table.range.endColumnIndex || 1) - 1)}`
+      : 'Unknown';
+    return JSON.stringify({
+      tableId: table.tableId,
+      name: table.name,
+      sheetName,
+      sheetId,
+      range,
+      columns,
+      columnCount: table.columnProperties?.length || 0,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error getting table details: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to get table details: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'deleteTable',
+description: 'Deletes a Sheets table object. Optionally also clears its cell data.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  tableIdentifier: z.string().describe('Table name or ID.'),
+  deleteData: z.boolean().optional().default(false).describe('If true, also clear cell data.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Deleting table "${args.tableIdentifier}" from spreadsheet: ${args.spreadsheetId}`);
+  try {
+    const { table, sheetName } = await SheetsHelpers.resolveTableIdentifier(sheets, args.spreadsheetId, args.tableIdentifier);
+    await SheetsHelpers.deleteTableHelper(sheets, args.spreadsheetId, table.tableId || '');
+    let clearedRange = null;
+    if (args.deleteData && table.range) {
+      const range = `${sheetName}!${SheetsHelpers.rowColToA1(table.range.startRowIndex || 0, table.range.startColumnIndex || 0)}:${SheetsHelpers.rowColToA1((table.range.endRowIndex || 1) - 1, (table.range.endColumnIndex || 1) - 1)}`;
+      await SheetsHelpers.clearRange(sheets, args.spreadsheetId, range);
+      clearedRange = range;
+    }
+    return JSON.stringify({
+      tableId: table.tableId,
+      name: table.name,
+      deleted: true,
+      dataCleared: args.deleteData,
+      clearedRange,
+      message: args.deleteData
+        ? `Table "${table.name}" deleted and data cleared.`
+        : `Table "${table.name}" deleted. Data preserved in range.`,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error deleting table: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to delete table: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'updateTableRange',
+description: 'Updates a Sheets table range. The new range must include the original range.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  tableIdentifier: z.string().describe('Table name or ID.'),
+  range: z.string().describe('New A1 range for the table.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Updating table range for "${args.tableIdentifier}": ${args.range}`);
+  try {
+    const { table, sheetName } = await SheetsHelpers.resolveTableIdentifier(sheets, args.spreadsheetId, args.tableIdentifier);
+    const { a1Range } = SheetsHelpers.parseRange(args.range);
+    const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, sheetName || undefined);
+    const newRange = SheetsHelpers.parseA1ToGridRange(a1Range, sheetId);
+    const oldRange = table.range;
+    if (oldRange) {
+      const oldStartRow = oldRange.startRowIndex ?? 0;
+      const oldEndRow = oldRange.endRowIndex ?? oldStartRow + 1;
+      const oldStartCol = oldRange.startColumnIndex ?? 0;
+      const oldEndCol = oldRange.endColumnIndex ?? oldStartCol + 1;
+      const newStartRow = newRange.startRowIndex ?? 0;
+      const newEndRow = newRange.endRowIndex ?? newStartRow + 1;
+      const newStartCol = newRange.startColumnIndex ?? 0;
+      const newEndCol = newRange.endColumnIndex ?? newStartCol + 1;
+      if (
+        newStartRow > oldStartRow ||
+        newEndRow < oldEndRow ||
+        newStartCol > oldStartCol ||
+        newEndCol < oldEndCol
+      ) {
+        throw new UserError('New table range must include the original table range.');
+      }
+    }
+    const updatedTable = await SheetsHelpers.updateTableRangeHelper(sheets, args.spreadsheetId, table.tableId || '', newRange);
+    return JSON.stringify({
+      tableId: updatedTable.tableId,
+      name: updatedTable.name,
+      oldRange: table.range
+        ? `${SheetsHelpers.rowColToA1(table.range.startRowIndex || 0, table.range.startColumnIndex || 0)}:${SheetsHelpers.rowColToA1((table.range.endRowIndex || 1) - 1, (table.range.endColumnIndex || 1) - 1)}`
+        : 'Unknown',
+      newRange: args.range,
+      columnCount: updatedTable.columnProperties?.length || 0,
+      message: `Table "${updatedTable.name}" range updated successfully.`,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error updating table range: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to update table range: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'appendTableRows',
+description: 'Appends rows to the end of a Sheets table.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  tableIdentifier: z.string().describe('Table name or ID.'),
+  values: z.array(z.array(z.any())).min(1).describe('2D array of values to append.'),
+  valueInputOption: z.enum(['RAW', 'USER_ENTERED']).optional().default('USER_ENTERED'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Appending ${args.values.length} rows to table "${args.tableIdentifier}"`);
+  try {
+    const { table } = await SheetsHelpers.resolveTableIdentifier(sheets, args.spreadsheetId, args.tableIdentifier);
+    const result = await SheetsHelpers.appendToTableHelper(
+      sheets,
+      args.spreadsheetId,
+      table.tableId || '',
+      args.values,
+      args.valueInputOption
+    );
+    return JSON.stringify({
+      tableId: table.tableId,
+      name: table.name,
+      rowsAppended: result.rowsAppended,
+      updatedRange: result.updatedRange,
+      message: `Successfully appended ${result.rowsAppended} row(s) to table "${table.name}".`,
+    }, null, 2);
+  } catch (error: any) {
+    log.error(`Error appending table rows: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to append table rows: ${error.message || 'Unknown error'}`);
+  }
+}
+});
+
+server.addTool({
+name: 'createSheetsComment',
+description: 'Creates a Drive comment on a spreadsheet, optionally with a click-through cell link.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  content: z.string().min(1).describe('Comment text.'),
+  sheetName: z.string().optional().describe('Sheet name when cell/range has no prefix.'),
+  cell: z.string().optional().describe('Target cell in A1 notation.'),
+  range: z.string().optional().describe('Target range in A1 notation.'),
+  includeCellLink: z.boolean().optional().default(true).describe('Append a click-through Sheets URL when a cell/range is given.'),
+})
+  .refine((data) => !(data.cell && data.range), { message: 'Provide either cell or range, not both.', path: ['range'] })
+  .refine((data) => {
+    if (!data.cell && !data.range) return true;
+    if (data.sheetName) return true;
+    return (data.cell ?? data.range ?? '').includes('!');
+  }, { message: 'sheetName is required when cell or range does not include a sheet prefix.', path: ['sheetName'] }),
+execute: async (args, { log }) => {
+  log.info(`Creating spreadsheet comment in ${args.spreadsheetId}`);
+  try {
+    const drive = await getDriveClient();
+    const sheets = await getSheetsClient();
+    let quotedText: string | undefined;
+    let locationLabel: string | undefined;
+    let cellUrl: string | undefined;
+    if (args.cell || args.range) {
+      const value = args.cell ?? args.range ?? '';
+      const bangIndex = value.lastIndexOf('!');
+      const rawSheetName = bangIndex >= 0 ? value.slice(0, bangIndex).replace(/^'|'$/g, '') : args.sheetName;
+      const a1Range = bangIndex >= 0 ? value.slice(bangIndex + 1) : value;
+      if (!rawSheetName) {
+        throw new UserError('Could not determine the target sheet name for the spreadsheet comment.');
+      }
+      const startCell = a1Range.split(':')[0];
+      if (!startCell.trim().match(/^([A-Za-z]+)(\d+)$/)) {
+        throw new UserError(`Invalid A1 cell reference: ${startCell}`);
+      }
+      const sheetId = await SheetsHelpers.resolveSheetId(sheets, args.spreadsheetId, rawSheetName);
+      const quotedSheet = "'" + rawSheetName.replace(/'/g, "''") + "'";
+      const valuesRes = await sheets.spreadsheets.values.get({
+        spreadsheetId: args.spreadsheetId,
+        range: `${quotedSheet}!${a1Range}`,
+        valueRenderOption: 'FORMATTED_VALUE',
+      });
+      const values = valuesRes.data.values || [];
+      const lines = values.map((row) => row.map((cell) => String(cell)).join('\t').trimEnd()).filter((line) => line.length > 0);
+      quotedText = lines.length > 0 ? lines.join('\n') : undefined;
+      locationLabel = `${rawSheetName}!${a1Range}`;
+      cellUrl = `https://docs.google.com/spreadsheets/d/${args.spreadsheetId}/edit#gid=${sheetId}&range=${encodeURIComponent(a1Range)}`;
+    }
+    const content = args.includeCellLink && cellUrl ? `${args.content}\n\n→ ${locationLabel}: ${cellUrl}` : args.content;
+    const response = await drive.comments.create({
+      fileId: args.spreadsheetId,
+      fields: 'id,quotedFileContent,createdTime',
+      requestBody: {
+        content,
+        ...(quotedText ? { quotedFileContent: { value: quotedText, mimeType: 'text/plain' } } : {}),
+      },
+    });
+    const linkNote =
+      args.includeCellLink && cellUrl
+        ? ` A click-through link to ${locationLabel} was added to the comment body so users can jump to the target cell.`
+        : locationLabel
+          ? ` Target location: ${locationLabel}.`
+          : '';
+    return (
+      `Comment added successfully. Comment ID: ${response.data.id}.` +
+      linkNote +
+      ' Note: the Drive API cannot natively anchor spreadsheet comments to a cell in the Sheets UI; use the click-through link to navigate to the location.'
+    );
+  } catch (error: any) {
+    log.error(`Error creating sheets comment: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    const errorDetails = error.response?.data?.error?.message || error.message || 'Unknown error';
+    throw new UserError(`Failed to create spreadsheet comment: ${errorDetails}`);
+  }
+}
+});
+
+server.addTool({
+name: 'createSheetsCellNote',
+description: 'Creates or replaces a native Google Sheets cell note on a cell or range.',
+parameters: z.object({
+  spreadsheetId: z.string().describe('The spreadsheet ID.'),
+  range: z.string().describe('A1 cell or range to attach the note to.'),
+  content: z.string().min(1).describe('Note content.'),
+}),
+execute: async (args, { log }) => {
+  const sheets = await getSheetsClient();
+  log.info(`Creating native cell note on ${args.range} in ${args.spreadsheetId}`);
+  try {
+    await SheetsHelpers.setCellNote(sheets, args.spreadsheetId, args.range, args.content);
+    return `Cell note added successfully to range "${args.range}".`;
+  } catch (error: any) {
+    log.error(`Error creating sheets cell note: ${error.message || error}`);
+    if (error instanceof UserError) throw error;
+    throw new UserError(`Failed to create cell note: ${error.message || 'Unknown error'}`);
   }
 }
 });

@@ -16,6 +16,8 @@ const INTERPOLATING_TOOLS = [
   'listAllFolders',
   'listGoogleSheets',
   'listGoogleSlides',
+  'listDriveFiles',
+  'searchDriveFiles',
 ];
 
 function toolBody(source, toolName) {

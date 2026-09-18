@@ -281,7 +281,7 @@ If you want to use this server with Claude Desktop, you need to tell Claude how 
 
     - **Make sure the path in `"args"` is correct and absolute!**
     - If the file already existed, carefully merge this entry into the existing `mcpServers` object. Ensure the JSON is valid (check commas!).
-    - `MCP_TOOL_GROUPS` is a comma-separated list of tool families registered at process start. Valid names: `docs`, `drive`, `sheets`, `slides`, `gmail`, plus opt-in `sheets-advanced` and `docs-chips` (empty until those tools exist). Unset, whitespace, or empty values keep today's full set (`docs,drive,sheets,slides,gmail`). `all` registers every family. The example `docs,drive,gmail` is the Personal/Work subset. Restart Claude Desktop after changing groups; they cannot change mid-session.
+    - `MCP_TOOL_GROUPS` is a comma-separated list of tool families registered at process start. Valid names: `docs`, `drive`, `sheets`, `slides`, `gmail`, plus opt-in `sheets-advanced` and `docs-chips`. Unset, whitespace, or empty values keep today's full set (`docs,drive,sheets,slides,gmail`). `all` registers every family. The example `docs,drive,gmail` is the Personal/Work subset. Restart Claude Desktop after changing groups; they cannot change mid-session.
 
 4.  **Save `mcp_config.json`.**
 5.  **Restart Claude Desktop:** Close Claude completely and reopen it.

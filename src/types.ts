@@ -109,6 +109,43 @@ styleArgs => Object.values(styleArgs).some(v => v !== undefined),
 });
 export type ApplyTextStyleToolArgs = z.infer<typeof ApplyTextStyleToolParameters>;
 
+export const CompactTextStyleParameters = z.object({
+  bold: z.boolean().optional(),
+  italic: z.boolean().optional(),
+  underline: z.boolean().optional(),
+  strikethrough: z.boolean().optional(),
+  fontSize: z.number().min(1).optional(),
+  fontFamily: z.string().optional(),
+  foregroundColor: z.string().refine(validateHexColor).optional(),
+  backgroundColor: z.string().refine(validateHexColor).optional(),
+  linkUrl: z.string().url().optional(),
+});
+
+const CompactRangeTarget = z.object({
+  startIndex: z.number().int().min(1),
+  endIndex: z.number().int().min(1),
+}).refine((d) => d.endIndex > d.startIndex, { message: 'endIndex must be greater than startIndex', path: ['endIndex'] });
+
+const CompactTextFindTarget = z.object({
+  textToFind: z.string().min(1),
+  matchInstance: z.number().int().min(1).optional().default(1),
+});
+
+export const BatchApplyTextStyleOperation = z.object({
+  target: z.union([CompactRangeTarget, CompactTextFindTarget]),
+  style: CompactTextStyleParameters.refine(
+    (styleArgs) => Object.values(styleArgs).some((v) => v !== undefined),
+    { message: 'At least one text style option must be provided.' }
+  ),
+});
+export type BatchApplyTextStyleOperationArgs = z.infer<typeof BatchApplyTextStyleOperation>;
+
+export const BatchApplyTextStyleToolParameters = DocumentIdParameter.extend({
+  operations: z.array(BatchApplyTextStyleOperation).min(1).max(500),
+  tabId: z.string().min(1).optional(),
+});
+export type BatchApplyTextStyleToolArgs = z.infer<typeof BatchApplyTextStyleToolParameters>;
+
 export const ApplyParagraphStyleToolParameters = DocumentIdParameter.extend({
 // Target EITHER by range OR by finding text (tool logic needs to find paragraph boundaries)
 target: z.union([

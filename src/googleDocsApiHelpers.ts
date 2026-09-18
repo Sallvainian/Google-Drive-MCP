@@ -45,6 +45,17 @@ const TAB_LIST_WITH_CONTENT_CHILD_FIELDS = `childTabs(${TAB_LIST_PROPERTIES},${T
 export const TAB_LIST_FIELDS = `title,tabs(${TAB_LIST_PROPERTIES},${TAB_LIST_CHILD_FIELDS})`;
 export const TAB_LIST_WITH_CONTENT_FIELDS = `title,tabs(${TAB_LIST_PROPERTIES},${TAB_BODY_END_DOCUMENT_TAB_FIELDS},${TAB_LIST_WITH_CONTENT_CHILD_FIELDS})`;
 
+export const TABLE_INDEX_BODY_FIELDS =
+  'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex)))))';
+export const TABLE_CONTENT_BASIC_BODY_FIELDS =
+  'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(textRun(content)))))))))';
+export const TABLE_CONTENT_INDEXED_BODY_FIELDS =
+  'body(content(startIndex,endIndex,table(tableRows(tableCells(startIndex,endIndex,content(startIndex,endIndex,paragraph(elements(startIndex,endIndex,textRun(content)))))))))';
+export const CLONE_TABLE_SOURCE_BODY_FIELDS =
+  'body(content(startIndex,endIndex,table(rows,columns,tableStyle(tableColumnProperties(width,widthType)),tableRows(startIndex,endIndex,tableRowStyle(minRowHeight,preventOverflow,tableHeader),tableCells(startIndex,endIndex,tableCellStyle(backgroundColor,borderTop(color,width,dashStyle),borderBottom(color,width,dashStyle),borderLeft(color,width,dashStyle),borderRight(color,width,dashStyle),contentAlignment,paddingTop,paddingBottom,paddingLeft,paddingRight,rowSpan,columnSpan),content(paragraph(elements(startIndex,endIndex,textRun(content,textStyle(bold))))))))))';
+export const CLONE_TABLE_TARGET_BODY_FIELDS =
+  'body(content(startIndex,endIndex,table(rows,columns,tableRows(tableCells(startIndex,endIndex,content(paragraph(elements(startIndex,endIndex,textRun(content)))))))))';
+
 /**
  * Returns bodyFields unchanged for a legacy (no tabId) documents.get, or wraps them
  * in a 3-deep tabs mask when tabId is set. Do not mix a root body(...) with tabs(...).
@@ -134,16 +145,21 @@ async function executeSingleBatch(
 
 // --- Text Finding Helper ---
 // This improved version is more robust in handling various text structure scenarios
-export async function findTextRange(docs: Docs, documentId: string, textToFind: string, instance: number = 1): Promise<{ startIndex: number; endIndex: number } | null> {
+export async function findTextRange(docs: Docs, documentId: string, textToFind: string, instance: number = 1, tabId?: string): Promise<{ startIndex: number; endIndex: number } | null> {
 try {
-    // Request more detailed information about the document structure
-    const res = await docs.documents.get({
-        documentId,
-        // Request more fields to handle various container types (not just paragraphs)
-        fields: FIND_TEXT_RANGE_FIELDS,
-    });
+    let bodyContent: docs_v1.Schema$StructuralElement[] | undefined;
+    if (tabId) {
+        const tab = await getDocumentTab(docs, documentId, tabId, `documentTab(${FIND_TEXT_RANGE_FIELDS})`);
+        bodyContent = tab.documentTab?.body?.content;
+    } else {
+        const res = await docs.documents.get({
+            documentId,
+            fields: FIND_TEXT_RANGE_FIELDS,
+        });
+        bodyContent = res.data.body?.content;
+    }
 
-    if (!res.data.body?.content) {
+    if (!bodyContent) {
         console.warn(`No content found in document ${documentId}`);
         return null;
     }
@@ -187,7 +203,7 @@ try {
         });
     };
 
-    collectTextFromContent(res.data.body.content);
+    collectTextFromContent(bodyContent);
 
     // Sort segments by starting position to ensure correct ordering
     segments.sort((a, b) => a.start - b.start);
@@ -1785,4 +1801,717 @@ export async function createFormattedDocument(
   }
 
   return document;
+}
+
+export interface ExtractedTableCell {
+  rowIndex: number;
+  columnIndex: number;
+  startIndex: number | null;
+  endIndex: number | null;
+  contentStartIndex: number | null;
+  contentEndIndex: number | null;
+  text: string;
+}
+
+export interface ExtractedTable {
+  tableId: string;
+  ordinal: number;
+  startIndex: number | null;
+  endIndex: number | null;
+  rowCount: number;
+  columnCount: number;
+  cells: ExtractedTableCell[];
+}
+
+export interface ExtractedTableColumnStyle {
+  columnIndex: number;
+  widthPt?: number;
+  widthType?: string | null;
+}
+
+export interface ExtractedTableRowStyle {
+  rowIndex: number;
+  minRowHeightPt?: number;
+  preventOverflow?: boolean;
+  tableHeader?: boolean;
+}
+
+export interface ExtractedTableCellStyle {
+  rowIndex: number;
+  columnIndex: number;
+  backgroundColor?: docs_v1.Schema$RgbColor;
+  contentAlignment?: 'CONTENT_ALIGNMENT_UNSPECIFIED' | 'TOP' | 'MIDDLE' | 'BOTTOM' | null;
+  paddingTopPt?: number;
+  paddingBottomPt?: number;
+  paddingLeftPt?: number;
+  paddingRightPt?: number;
+  borderTop?: docs_v1.Schema$TableCellBorder;
+  borderBottom?: docs_v1.Schema$TableCellBorder;
+  borderLeft?: docs_v1.Schema$TableCellBorder;
+  borderRight?: docs_v1.Schema$TableCellBorder;
+  hasBoldText?: boolean;
+}
+
+export interface ExtractedTableSnapshot {
+  tableId: string;
+  startIndex: number | null;
+  endIndex: number | null;
+  rowCount: number;
+  columnCount: number;
+  data: string[][];
+  columnStyles: ExtractedTableColumnStyle[];
+  rowStyles: ExtractedTableRowStyle[];
+  cellStyles: ExtractedTableCellStyle[];
+  pinnedHeaderRowsCount: number;
+}
+
+function getTableContentSource(
+  doc: docs_v1.Schema$Document,
+  tabId?: string
+): docs_v1.Schema$StructuralElement[] {
+  if (tabId) {
+    const targetTab = findTabById(doc, tabId);
+    if (!targetTab?.documentTab?.body?.content) {
+      return [];
+    }
+    return targetTab.documentTab.body.content;
+  }
+  return doc.body?.content ?? [];
+}
+
+function extractParagraphText(paragraph?: docs_v1.Schema$Paragraph): string {
+  return (
+    paragraph?.elements
+      ?.map((element) => element.textRun?.content ?? '')
+      .join('')
+      .replace(/\n+$/g, '') ?? ''
+  );
+}
+
+function extractCellText(content: docs_v1.Schema$StructuralElement[] = []): string {
+  const parts: string[] = [];
+  for (const element of content) {
+    if (element.paragraph) {
+      const text = extractParagraphText(element.paragraph);
+      if (text) parts.push(text);
+    }
+    if (element.table?.tableRows) {
+      for (const row of element.table.tableRows) {
+        for (const cell of row.tableCells ?? []) {
+          const text = extractCellText(cell.content ?? []);
+          if (text) parts.push(text);
+        }
+      }
+    }
+  }
+  return parts.join('\n').trim();
+}
+
+function extractCellContentRange(content: docs_v1.Schema$StructuralElement[] = []): {
+  contentStartIndex: number | null;
+  contentEndIndex: number | null;
+} {
+  let minStart: number | null = null;
+  let maxEnd: number | null = null;
+  const visitContent = (elements: docs_v1.Schema$StructuralElement[]) => {
+    for (const element of elements) {
+      for (const paragraphElement of element.paragraph?.elements ?? []) {
+        const startIndex = paragraphElement.startIndex;
+        if (typeof startIndex === 'number') {
+          minStart = minStart === null ? startIndex : Math.min(minStart, startIndex);
+        }
+        const endIndex = paragraphElement.endIndex;
+        if (typeof endIndex === 'number') {
+          maxEnd = maxEnd === null ? endIndex : Math.max(maxEnd, endIndex);
+        }
+      }
+      if (element.table?.tableRows) {
+        for (const row of element.table.tableRows) {
+          for (const cell of row.tableCells ?? []) {
+            visitContent(cell.content ?? []);
+          }
+        }
+      }
+    }
+  };
+  visitContent(content);
+  return { contentStartIndex: minStart, contentEndIndex: maxEnd };
+}
+
+function dimensionToPt(dimension?: docs_v1.Schema$Dimension): number | undefined {
+  if (!dimension?.magnitude || dimension.unit !== 'PT') return undefined;
+  return dimension.magnitude;
+}
+
+function normalizeCellStyle(
+  rowIndex: number,
+  columnIndex: number,
+  cell: docs_v1.Schema$TableCell
+): ExtractedTableCellStyle | null {
+  const style = cell.tableCellStyle;
+  const firstParagraphHasBoldText = (cell.content ?? []).some((element) =>
+    (element.paragraph?.elements ?? []).some(
+      (paragraphElement) => paragraphElement.textRun?.textStyle?.bold
+    )
+  );
+  if (!style && !firstParagraphHasBoldText) return null;
+  const contentAlignment =
+    style?.contentAlignment === 'TOP' ||
+    style?.contentAlignment === 'MIDDLE' ||
+    style?.contentAlignment === 'BOTTOM' ||
+    style?.contentAlignment === 'CONTENT_ALIGNMENT_UNSPECIFIED'
+      ? style.contentAlignment
+      : null;
+  return {
+    rowIndex,
+    columnIndex,
+    backgroundColor: style?.backgroundColor?.color?.rgbColor ?? undefined,
+    contentAlignment,
+    paddingTopPt: dimensionToPt(style?.paddingTop),
+    paddingBottomPt: dimensionToPt(style?.paddingBottom),
+    paddingLeftPt: dimensionToPt(style?.paddingLeft),
+    paddingRightPt: dimensionToPt(style?.paddingRight),
+    borderTop: style?.borderTop ?? undefined,
+    borderBottom: style?.borderBottom ?? undefined,
+    borderLeft: style?.borderLeft ?? undefined,
+    borderRight: style?.borderRight ?? undefined,
+    hasBoldText: firstParagraphHasBoldText || undefined,
+  };
+}
+
+export function extractDocumentTables(
+  doc: docs_v1.Schema$Document,
+  tabId?: string
+): ExtractedTable[] {
+  const content = getTableContentSource(doc, tabId);
+  const tables: ExtractedTable[] = [];
+  const tabKey = tabId ?? 'body';
+  for (const element of content) {
+    if (!element.table?.tableRows) continue;
+    const ordinal = tables.length;
+    const cells: ExtractedTableCell[] = [];
+    let columnCount = 0;
+    element.table.tableRows.forEach((row, rowIndex) => {
+      const rowCells = row.tableCells ?? [];
+      columnCount = Math.max(columnCount, rowCells.length);
+      rowCells.forEach((cell, columnIndex) => {
+        const { contentStartIndex, contentEndIndex } = extractCellContentRange(cell.content ?? []);
+        cells.push({
+          rowIndex,
+          columnIndex,
+          startIndex: cell.startIndex ?? null,
+          endIndex: cell.endIndex ?? null,
+          contentStartIndex,
+          contentEndIndex,
+          text: extractCellText(cell.content ?? []),
+        });
+      });
+    });
+    tables.push({
+      tableId: `table:${tabKey}:${ordinal}`,
+      ordinal,
+      startIndex: element.startIndex ?? null,
+      endIndex: element.endIndex ?? null,
+      rowCount: element.table.tableRows.length,
+      columnCount,
+      cells,
+    });
+  }
+  return tables;
+}
+
+export function getTableById(
+  doc: docs_v1.Schema$Document,
+  tableId: string,
+  tabId?: string
+): ExtractedTable | null {
+  return extractDocumentTables(doc, tabId).find((table) => table.tableId === tableId) ?? null;
+}
+
+export function extractTableSnapshot(
+  doc: docs_v1.Schema$Document,
+  tableId: string,
+  tabId?: string
+): ExtractedTableSnapshot | null {
+  const content = getTableContentSource(doc, tabId);
+  const tabKey = tabId ?? 'body';
+  let ordinal = 0;
+  for (const element of content) {
+    if (!element.table?.tableRows) continue;
+    const currentTableId = `table:${tabKey}:${ordinal}`;
+    ordinal++;
+    if (currentTableId !== tableId) continue;
+    const data: string[][] = [];
+    const rowStyles: ExtractedTableRowStyle[] = [];
+    const cellStyles: ExtractedTableCellStyle[] = [];
+    let pinnedHeaderRowsCount = 0;
+    element.table.tableRows.forEach((row, rowIndex) => {
+      const rowData: string[] = [];
+      const rowStyle = row.tableRowStyle;
+      if (rowStyle) {
+        rowStyles.push({
+          rowIndex,
+          minRowHeightPt: dimensionToPt(rowStyle.minRowHeight),
+          preventOverflow: rowStyle.preventOverflow ?? undefined,
+          tableHeader: rowStyle.tableHeader ?? undefined,
+        });
+      }
+      if ((rowStyle?.tableHeader ?? false) && pinnedHeaderRowsCount === rowIndex) {
+        pinnedHeaderRowsCount++;
+      }
+      (row.tableCells ?? []).forEach((cell, columnIndex) => {
+        rowData.push(extractCellText(cell.content ?? []));
+        const cellStyle = normalizeCellStyle(rowIndex, columnIndex, cell);
+        if (cellStyle) cellStyles.push(cellStyle);
+      });
+      data.push(rowData);
+    });
+    const columnStyles: ExtractedTableColumnStyle[] =
+      element.table.tableStyle?.tableColumnProperties?.map((column, columnIndex) => ({
+        columnIndex,
+        widthPt: dimensionToPt(column.width),
+        widthType: column.widthType,
+      })) ?? [];
+    return {
+      tableId: currentTableId,
+      startIndex: element.startIndex ?? null,
+      endIndex: element.endIndex ?? null,
+      rowCount: element.table.rows ?? data.length,
+      columnCount: element.table.columns ?? Math.max(...data.map((row) => row.length), 0),
+      data,
+      columnStyles,
+      rowStyles,
+      cellStyles,
+      pinnedHeaderRowsCount,
+    };
+  }
+  return null;
+}
+
+export function buildReplaceTableCellContentRequests(
+  cell: ExtractedTable['cells'][number],
+  nextValue: string,
+  tabId?: string
+): docs_v1.Schema$Request[] {
+  const requests: docs_v1.Schema$Request[] = [];
+  const insertionIndex = cell.contentStartIndex ?? cell.startIndex;
+  if (insertionIndex == null) {
+    throw new UserError(
+      `Cell [row=${cell.rowIndex}, col=${cell.columnIndex}] does not have a writable insertion index.`
+    );
+  }
+  if (
+    cell.text &&
+    cell.contentStartIndex !== null &&
+    cell.contentEndIndex !== null &&
+    cell.contentEndIndex - 1 > cell.contentStartIndex
+  ) {
+    const range: docs_v1.Schema$Range = {
+      startIndex: cell.contentStartIndex,
+      endIndex: cell.contentEndIndex - 1,
+    };
+    if (tabId) range.tabId = tabId;
+    requests.push({ deleteContentRange: { range } });
+  }
+  if (nextValue) {
+    const location: docs_v1.Schema$Location = { index: insertionIndex };
+    if (tabId) location.tabId = tabId;
+    requests.push({ insertText: { location, text: nextValue } });
+  }
+  return requests;
+}
+
+export function buildReplaceTableRowRequests(
+  table: ExtractedTable,
+  rowIndex: number,
+  values: string[],
+  tabId?: string
+): docs_v1.Schema$Request[] {
+  if (rowIndex < 0 || rowIndex >= table.rowCount) {
+    throw new UserError(
+      `Row index ${rowIndex} is out of bounds for table ${table.tableId} with ${table.rowCount} rows.`
+    );
+  }
+  if (values.length > table.columnCount) {
+    throw new UserError(
+      `Received ${values.length} values for table ${table.tableId}, but the table only has ${table.columnCount} columns.`
+    );
+  }
+  return table.cells
+    .filter((cell) => cell.rowIndex === rowIndex)
+    .sort((a, b) => b.columnIndex - a.columnIndex)
+    .flatMap((cell) =>
+      buildReplaceTableCellContentRequests(cell, values[cell.columnIndex] ?? '', tabId)
+    );
+}
+
+export async function replaceTableRowData(
+  docs: Docs,
+  documentId: string,
+  table: ExtractedTable,
+  rowIndex: number,
+  values: string[],
+  tabId?: string
+): Promise<void> {
+  const requests = buildReplaceTableRowRequests(table, rowIndex, values, tabId);
+  if (requests.length === 0) return;
+  await executeBatchUpdate(docs, documentId, requests);
+}
+
+export function buildInsertTableWithDataRequests(
+  data: string[][],
+  index: number,
+  hasHeaderRow: boolean,
+  tabId?: string
+): docs_v1.Schema$Request[] {
+  const numRows = data.length;
+  const numCols = data.reduce((max, row) => Math.max(max, row.length), 0);
+  if (numRows === 0 || numCols === 0) {
+    throw new UserError(
+      'Table data must contain at least one non-empty row with at least one cell.'
+    );
+  }
+  const normalizedData = data.map((row) => {
+    const padded = [...row];
+    while (padded.length < numCols) padded.push('');
+    return padded;
+  });
+  const insertRequests: docs_v1.Schema$Request[] = [];
+  const formatRequests: docs_v1.Schema$Request[] = [];
+  const location: docs_v1.Schema$Location = { index };
+  if (tabId) location.tabId = tabId;
+  insertRequests.push({
+    insertTable: {
+      location,
+      rows: numRows,
+      columns: numCols,
+    },
+  });
+  let cumulativeTextLength = 0;
+  for (let r = 0; r < numRows; r++) {
+    for (let c = 0; c < numCols; c++) {
+      const cellText = normalizedData[r][c];
+      if (!cellText) continue;
+      const baseCellIndex = index + 4 + r * (1 + 2 * numCols) + 2 * c;
+      const adjustedIndex = baseCellIndex + cumulativeTextLength;
+      const cellLocation: docs_v1.Schema$Location = { index: adjustedIndex };
+      if (tabId) cellLocation.tabId = tabId;
+      insertRequests.push({
+        insertText: {
+          location: cellLocation,
+          text: cellText,
+        },
+      });
+      if (hasHeaderRow && r === 0) {
+        const styleReq = buildUpdateTextStyleRequest(
+          adjustedIndex,
+          adjustedIndex + cellText.length,
+          { bold: true },
+          tabId
+        );
+        if (styleReq) formatRequests.push(styleReq.request);
+      }
+      cumulativeTextLength += cellText.length;
+    }
+  }
+  return [...insertRequests, ...formatRequests];
+}
+
+export function buildInsertSectionBreakRequest(params: {
+  index: number;
+  sectionType: 'NEXT_PAGE' | 'CONTINUOUS';
+  tabId?: string;
+}): docs_v1.Schema$Request {
+  const location: docs_v1.Schema$Location = { index: params.index };
+  if (params.tabId) {
+    location.tabId = params.tabId;
+  }
+  return {
+    insertSectionBreak: {
+      location,
+      sectionType: params.sectionType,
+    },
+  };
+}
+
+export interface UpdateSectionStyleBuilderInput {
+  startIndex: number;
+  endIndex: number;
+  flipPageOrientation?: boolean;
+  sectionType?: 'SECTION_TYPE_UNSPECIFIED' | 'CONTINUOUS' | 'NEXT_PAGE';
+  marginTop?: number;
+  marginBottom?: number;
+  marginLeft?: number;
+  marginRight?: number;
+  pageNumberStart?: number;
+  tabId?: string;
+}
+
+export function buildUpdateSectionStyleRequest(
+  params: UpdateSectionStyleBuilderInput
+): { request: docs_v1.Schema$Request; fields: string[] } | null {
+  const sectionStyle: docs_v1.Schema$SectionStyle = {};
+  const fields: string[] = [];
+  if (params.flipPageOrientation !== undefined) {
+    sectionStyle.flipPageOrientation = params.flipPageOrientation;
+    fields.push('flipPageOrientation');
+  }
+  if (params.sectionType !== undefined) {
+    sectionStyle.sectionType = params.sectionType;
+    fields.push('sectionType');
+  }
+  if (params.marginTop !== undefined) {
+    sectionStyle.marginTop = { magnitude: params.marginTop, unit: 'PT' };
+    fields.push('marginTop');
+  }
+  if (params.marginBottom !== undefined) {
+    sectionStyle.marginBottom = { magnitude: params.marginBottom, unit: 'PT' };
+    fields.push('marginBottom');
+  }
+  if (params.marginLeft !== undefined) {
+    sectionStyle.marginLeft = { magnitude: params.marginLeft, unit: 'PT' };
+    fields.push('marginLeft');
+  }
+  if (params.marginRight !== undefined) {
+    sectionStyle.marginRight = { magnitude: params.marginRight, unit: 'PT' };
+    fields.push('marginRight');
+  }
+  if (params.pageNumberStart !== undefined) {
+    sectionStyle.pageNumberStart = params.pageNumberStart;
+    fields.push('pageNumberStart');
+  }
+  if (fields.length === 0) {
+    return null;
+  }
+  const range: docs_v1.Schema$Range = {
+    startIndex: params.startIndex,
+    endIndex: params.endIndex,
+  };
+  if (params.tabId) {
+    range.tabId = params.tabId;
+  }
+  return {
+    request: {
+      updateSectionStyle: {
+        range,
+        sectionStyle,
+        fields: fields.join(','),
+      },
+    },
+    fields,
+  };
+}
+
+export interface BuildModifyTextOpts {
+  startIndex: number;
+  endIndex?: number;
+  text?: string;
+  style?: TextStyleArgs;
+  tabId?: string;
+}
+
+export function buildModifyTextRequests(opts: BuildModifyTextOpts): docs_v1.Schema$Request[] {
+  const { startIndex, endIndex, text, style, tabId } = opts;
+  const requests: docs_v1.Schema$Request[] = [];
+  if (text === undefined && !style) return requests;
+  if (endIndex !== undefined && text !== undefined) {
+    const range: docs_v1.Schema$Range = { startIndex, endIndex };
+    if (tabId) range.tabId = tabId;
+    requests.push({ deleteContentRange: { range } });
+  }
+  if (text !== undefined) {
+    const location: docs_v1.Schema$Location = { index: startIndex };
+    if (tabId) location.tabId = tabId;
+    requests.push({ insertText: { location, text } });
+  }
+  if (style) {
+    const formatStart = startIndex;
+    const formatEnd =
+      text !== undefined
+        ? startIndex + text.length
+        : endIndex !== undefined
+          ? endIndex
+          : startIndex;
+    if (formatEnd > formatStart) {
+      const requestInfo = buildUpdateTextStyleRequest(formatStart, formatEnd, style, tabId);
+      if (requestInfo) {
+        requests.push(requestInfo.request);
+      }
+    }
+  }
+  return requests;
+}
+
+export function buildTableStartLocation(
+  tableStartIndex: number,
+  tabId?: string
+): docs_v1.Schema$Location {
+  const location: docs_v1.Schema$Location = { index: tableStartIndex };
+  if (tabId) {
+    location.tabId = tabId;
+  }
+  return location;
+}
+
+type TableCellStyleArgs = {
+  backgroundColor?: docs_v1.Schema$RgbColor;
+  contentAlignment?: 'CONTENT_ALIGNMENT_UNSPECIFIED' | 'TOP' | 'MIDDLE' | 'BOTTOM';
+  rowSpan?: number;
+  columnSpan?: number;
+  paddingTopPt?: number;
+  paddingBottomPt?: number;
+  paddingLeftPt?: number;
+  paddingRightPt?: number;
+  borderTop?: docs_v1.Schema$TableCellBorder;
+  borderBottom?: docs_v1.Schema$TableCellBorder;
+  borderLeft?: docs_v1.Schema$TableCellBorder;
+  borderRight?: docs_v1.Schema$TableCellBorder;
+};
+
+function pointDimension(magnitude: number): docs_v1.Schema$Dimension {
+  return { magnitude, unit: 'PT' };
+}
+
+export function buildTableCellStyleRequest(
+  tableStartIndex: number,
+  rowIndex: number,
+  columnIndex: number,
+  style: TableCellStyleArgs,
+  tabId?: string
+): { request: docs_v1.Schema$Request; fields: string[] } | null {
+  const tableCellStyle: docs_v1.Schema$TableCellStyle = {};
+  const fields: string[] = [];
+  if (style.backgroundColor) {
+    tableCellStyle.backgroundColor = { color: { rgbColor: style.backgroundColor } };
+    fields.push('backgroundColor');
+  }
+  if (style.contentAlignment) {
+    tableCellStyle.contentAlignment = style.contentAlignment;
+    fields.push('contentAlignment');
+  }
+  if (style.paddingTopPt !== undefined) {
+    tableCellStyle.paddingTop = pointDimension(style.paddingTopPt);
+    fields.push('paddingTop');
+  }
+  if (style.paddingBottomPt !== undefined) {
+    tableCellStyle.paddingBottom = pointDimension(style.paddingBottomPt);
+    fields.push('paddingBottom');
+  }
+  if (style.paddingLeftPt !== undefined) {
+    tableCellStyle.paddingLeft = pointDimension(style.paddingLeftPt);
+    fields.push('paddingLeft');
+  }
+  if (style.paddingRightPt !== undefined) {
+    tableCellStyle.paddingRight = pointDimension(style.paddingRightPt);
+    fields.push('paddingRight');
+  }
+  if (style.borderTop) {
+    tableCellStyle.borderTop = style.borderTop;
+    fields.push('borderTop');
+  }
+  if (style.borderBottom) {
+    tableCellStyle.borderBottom = style.borderBottom;
+    fields.push('borderBottom');
+  }
+  if (style.borderLeft) {
+    tableCellStyle.borderLeft = style.borderLeft;
+    fields.push('borderLeft');
+  }
+  if (style.borderRight) {
+    tableCellStyle.borderRight = style.borderRight;
+    fields.push('borderRight');
+  }
+  if (fields.length === 0) return null;
+  const rowSpan = style.rowSpan ?? 1;
+  const columnSpan = style.columnSpan ?? 1;
+  return {
+    request: {
+      updateTableCellStyle: {
+        tableRange: {
+          tableCellLocation: {
+            tableStartLocation: buildTableStartLocation(tableStartIndex, tabId),
+            rowIndex,
+            columnIndex,
+          },
+          rowSpan,
+          columnSpan,
+        },
+        tableCellStyle,
+        fields: fields.join(','),
+      },
+    },
+    fields,
+  };
+}
+
+export function buildTableBorder(
+  color: docs_v1.Schema$RgbColor,
+  widthPt: number,
+  dashStyle: 'SOLID' | 'DASHED' | 'DOTTED'
+): docs_v1.Schema$TableCellBorder {
+  return {
+    color: { color: { rgbColor: color } },
+    width: pointDimension(widthPt),
+    dashStyle,
+  };
+}
+
+export function buildTableColumnWidthRequest(
+  tableStartIndex: number,
+  columnIndices: number[],
+  widthPt: number,
+  tabId?: string
+): docs_v1.Schema$Request {
+  return {
+    updateTableColumnProperties: {
+      tableStartLocation: buildTableStartLocation(tableStartIndex, tabId),
+      columnIndices,
+      tableColumnProperties: {
+        widthType: 'FIXED_WIDTH',
+        width: pointDimension(widthPt),
+      },
+      fields: 'widthType,width',
+    },
+  };
+}
+
+export function buildTableRowStyleRequest(
+  tableStartIndex: number,
+  rowIndices: number[],
+  minRowHeightPt: number | undefined,
+  preventOverflow: boolean | undefined,
+  tabId?: string
+): docs_v1.Schema$Request | null {
+  const tableRowStyle: docs_v1.Schema$TableRowStyle = {};
+  const fields: string[] = [];
+  if (minRowHeightPt !== undefined) {
+    tableRowStyle.minRowHeight = pointDimension(minRowHeightPt);
+    fields.push('minRowHeight');
+  }
+  if (preventOverflow !== undefined) {
+    tableRowStyle.preventOverflow = preventOverflow;
+    fields.push('preventOverflow');
+  }
+  if (fields.length === 0) return null;
+  return {
+    updateTableRowStyle: {
+      tableStartLocation: buildTableStartLocation(tableStartIndex, tabId),
+      rowIndices,
+      tableRowStyle,
+      fields: fields.join(','),
+    },
+  };
+}
+
+export function buildPinTableHeaderRowsRequest(
+  tableStartIndex: number,
+  pinnedHeaderRowsCount: number,
+  tabId?: string
+): docs_v1.Schema$Request {
+  return {
+    pinTableHeaderRows: {
+      tableStartLocation: buildTableStartLocation(tableStartIndex, tabId),
+      pinnedHeaderRowsCount,
+    },
+  };
 }
