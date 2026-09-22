@@ -116,7 +116,3 @@ in `docs/` — they are regenerated wholesale, not hand-edited.
   in the Docs UI.
 
 <!-- /bmad:context -->
-
-## Review workflow (temporary)
-
-Claude Code review is paused (`claude-code-review.yml` starts with `false &&`) while usage is exhausted. The Grok stand-in workflow was removed. Restore Claude by deleting the `false &&` line.

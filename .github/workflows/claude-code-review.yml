@@ -15,10 +15,7 @@ jobs:
     # claude[bot] is the deliberate exception, kept via `allowed_bots: 'claude'`
     # below, so its PRs still get reviewed. Matching on `user.type` covers
     # copilot-swe-agent and friends without maintaining a login denylist.
-    # Paused 2026-09-15 while Claude Code usage is exhausted. Restore this
-    # job by deleting the `false &&` line.
     if: |
-      false &&
       !github.event.pull_request.draft &&
       !github.event.pull_request.merged &&
       (github.event.pull_request.user.type != 'Bot' ||
