@@ -18,7 +18,7 @@
   "dependencies": {
     "fastmcp": "^4.20.13",
     "google-auth-library": "^11.0.2",
-    "googleapis": "^181.0.0",
+    "googleapis": "^182.0.0",
     "markdown-it": "^14.1.0",
     "zod": "^4.6.4"
   },
